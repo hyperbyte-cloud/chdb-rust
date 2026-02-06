@@ -230,7 +230,11 @@ impl Connection {
     /// - The table name contains invalid characters
     /// - The Arrow stream handle is invalid
     /// - Registration fails for any other reason
-    pub fn register_arrow_stream(&self, table_name: &str, arrow_stream: &ArrowStream) -> Result<()> {
+    pub fn register_arrow_stream(
+        &self,
+        table_name: &str,
+        arrow_stream: &ArrowStream,
+    ) -> Result<()> {
         let table_name_cstr = CString::new(table_name)?;
         let conn = unsafe { *self.inner };
 
@@ -358,9 +362,8 @@ impl Connection {
         let table_name_cstr = CString::new(table_name)?;
         let conn = unsafe { *self.inner };
 
-        let state = unsafe {
-            bindings::chdb_arrow_unregister_table(conn, table_name_cstr.as_ptr())
-        };
+        let state =
+            unsafe { bindings::chdb_arrow_unregister_table(conn, table_name_cstr.as_ptr()) };
 
         if state == bindings::chdb_state_CHDBSuccess {
             Ok(())

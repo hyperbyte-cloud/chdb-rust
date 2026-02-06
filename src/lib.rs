@@ -37,6 +37,7 @@
 //! All public functions are safe to call, and the crate ensures proper resource cleanup.
 
 pub mod arg;
+pub mod arrow_stream;
 #[allow(
     dead_code,
     unused,
@@ -45,7 +46,6 @@ pub mod arg;
     non_upper_case_globals
 )]
 mod bindings;
-pub mod arrow_stream;
 pub mod connection;
 pub mod error;
 pub mod format;
