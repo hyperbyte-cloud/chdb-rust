@@ -45,6 +45,7 @@ pub mod arg;
     non_upper_case_globals
 )]
 mod bindings;
+pub mod arrow_stream;
 pub mod connection;
 pub mod error;
 pub mod format;
