@@ -67,8 +67,8 @@ fn find_existing_libchdb() -> Option<(PathBuf, PathBuf)> {
 
 fn download_libchdb_to_out_dir(out_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let platform = get_platform_string()?;
-    let version = "v4.0.1";
-    let url = format!("https://github.com/chdb-io/chdb/releases/download/{version}/{platform}");
+    let version = "v26.1.0";
+    let url = format!("https://github.com/chdb-io/chdb-core/releases/download/{version}/{platform}");
     println!("cargo:warning=Downloading libchdb from: {url}");
     let response = reqwest::blocking::get(&url)?;
     let content = response.bytes()?;
@@ -112,7 +112,9 @@ fn setup_link_paths(lib_dir: &Path) {
 }
 
 fn generate_bindings(header_path: &Path, out_dir: &Path) {
-    let wrapper_content = format!("#include \"{}\"", header_path.display());
+    let abs_header = fs::canonicalize(header_path)
+        .unwrap_or_else(|_| panic!("Cannot resolve header path: {}", header_path.display()));
+    let wrapper_content = format!("#include \"{}\"", abs_header.display());
     let temp_wrapper = out_dir.join("temp_wrapper.h");
     fs::write(&temp_wrapper, wrapper_content).expect("Failed to write temp wrapper");
     let bindings = bindgen::Builder::default()

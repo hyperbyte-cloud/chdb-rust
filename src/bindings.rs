@@ -256,22 +256,20 @@ const _: () = {
     ["Offset of field: local_result_v2::error_message"]
         [::std::mem::offset_of!(local_result_v2, error_message) - 48usize];
 };
-#[doc = " Connection structure for chDB\n Contains server instance, connection state, and query processing queue"]
+#[doc = " Connection structure for chDB\n Contains ChdbClient instance and connection state"]
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct chdb_conn {
     pub server: *mut ::std::os::raw::c_void,
     pub connected: bool,
-    pub queue: *mut ::std::os::raw::c_void,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of chdb_conn"][::std::mem::size_of::<chdb_conn>() - 24usize];
+    ["Size of chdb_conn"][::std::mem::size_of::<chdb_conn>() - 16usize];
     ["Alignment of chdb_conn"][::std::mem::align_of::<chdb_conn>() - 8usize];
     ["Offset of field: chdb_conn::server"][::std::mem::offset_of!(chdb_conn, server) - 0usize];
     ["Offset of field: chdb_conn::connected"]
         [::std::mem::offset_of!(chdb_conn, connected) - 8usize];
-    ["Offset of field: chdb_conn::queue"][::std::mem::offset_of!(chdb_conn, queue) - 16usize];
 };
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
