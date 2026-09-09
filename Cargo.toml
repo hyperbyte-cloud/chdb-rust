@@ -102,6 +102,10 @@ required-features = ["durable"]
 name = "durable_s3"
 required-features = ["durable-s3"]
 
+[[test]]
+name = "arrow_query"
+required-features = ["arrow"]
+
 [package.metadata.chdb]
 # The chdb-core release this crate builds against. This is a chdb-core release
 # number, not a ClickHouse one: X.Y is the ClickHouse minor line the release sits

@@ -82,6 +82,20 @@ impl<'a> QueryStream<'a> {
         })
     }
 
+    pub(crate) fn start_borrowed_with_params(
+        conn: &'a mut Connection,
+        sql: &str,
+        format: OutputFormat,
+        params: &[(&str, &str)],
+    ) -> Result<Self> {
+        let stream = Self::start_query_with_params(conn.handle(), sql, format, params)?;
+        Ok(Self {
+            conn: QueryStreamConnection::Borrowed(conn),
+            stream,
+            finished: false,
+        })
+    }
+
     fn start_query(
         conn: bindings::chdb_connection,
         sql: &str,
@@ -105,6 +119,43 @@ impl<'a> QueryStream<'a> {
             )
         };
 
+        Self::check_start(stream_ptr)
+    }
+
+    /// Wraps `chdb_stream_query_with_params_n`. Bindings are captured during
+    /// stream initialisation and cleared when it returns, so nothing has to be
+    /// kept alive for the life of the stream.
+    fn start_query_with_params(
+        conn: bindings::chdb_connection,
+        sql: &str,
+        format: OutputFormat,
+        params: &[(&str, &str)],
+    ) -> Result<*mut bindings::chdb_result> {
+        let format = format.as_str();
+        let p = crate::params::ParamArrays::new(params);
+
+        let stream_ptr = unsafe {
+            bindings::chdb_stream_query_with_params_n(
+                conn,
+                sql.as_ptr() as *const c_char,
+                sql.len(),
+                format.as_ptr() as *const c_char,
+                format.len(),
+                p.names(),
+                p.name_lens(),
+                p.values(),
+                p.value_lens(),
+                p.count(),
+            )
+        };
+
+        Self::check_start(stream_ptr)
+    }
+
+    /// A non-null stream handle may still carry an initialisation error, so the
+    /// handle is probed once before it is handed out. The probe must not free
+    /// the handle on the success path, hence the `ManuallyDrop` dance.
+    fn check_start(stream_ptr: *mut bindings::chdb_result) -> Result<*mut bindings::chdb_result> {
         if stream_ptr.is_null() {
             return Err(Error::NoResult);
         }

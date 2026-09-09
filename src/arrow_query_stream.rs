@@ -64,6 +64,19 @@ impl<'a> ArrowQueryStream<'a> {
         })
     }
 
+    pub(crate) fn start_borrowed_with_params(
+        conn: &'a mut Connection,
+        sql: &str,
+        params: &[(&str, &str)],
+    ) -> Result<Self> {
+        let inner = Self::start_query_with_params(conn.handle(), sql, params)?;
+        Ok(Self {
+            conn: ArrowQueryStreamConnection::Borrowed(conn),
+            inner,
+            finished: false,
+        })
+    }
+
     fn start_query(
         conn: bindings::chdb_connection,
         sql: &str,
@@ -86,6 +99,39 @@ impl<'a> ArrowQueryStream<'a> {
             )
         };
 
+        Self::check_start(stream_ptr)
+    }
+
+    /// Wraps `chdb_stream_query_arrow_with_params_n`. The null options pointer
+    /// asks for the engine's default type mapping.
+    fn start_query_with_params(
+        conn: bindings::chdb_connection,
+        sql: &str,
+        params: &[(&str, &str)],
+    ) -> Result<*mut bindings::chdb_result> {
+        let p = crate::params::ParamArrays::new(params);
+
+        let stream_ptr = unsafe {
+            bindings::chdb_stream_query_arrow_with_params_n(
+                conn,
+                sql.as_ptr() as *const c_char,
+                sql.len(),
+                std::ptr::null(),
+                p.names(),
+                p.name_lens(),
+                p.values(),
+                p.value_lens(),
+                p.count(),
+            )
+        };
+
+        Self::check_start(stream_ptr)
+    }
+
+    /// A non-null stream handle may still carry an initialisation error, so the
+    /// handle is probed once before it is handed out. The probe must not free
+    /// the handle on the success path, hence the `ManuallyDrop` dance.
+    fn check_start(stream_ptr: *mut bindings::chdb_result) -> Result<*mut bindings::chdb_result> {
         if stream_ptr.is_null() {
             return Err(Error::NoResult);
         }

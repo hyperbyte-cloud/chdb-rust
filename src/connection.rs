@@ -353,6 +353,23 @@ impl Connection {
         QueryStream::start_borrowed(self, sql, format)
     }
 
+    /// Stream a query's result with server-side named parameter binding.
+    ///
+    /// The streaming counterpart of
+    /// [`query_with_params`](Self::query_with_params); see it for placeholder
+    /// syntax and binding rules.
+    ///
+    /// The connection is exclusively borrowed for the life of the stream,
+    /// because it accepts no other statement while a stream is open.
+    pub fn query_stream_with_params<'a>(
+        &'a mut self,
+        sql: &str,
+        format: OutputFormat,
+        params: &[(&str, &str)],
+    ) -> Result<QueryStream<'a>> {
+        QueryStream::start_borrowed_with_params(self, sql, format, params)
+    }
+
     /// Execute a query and stream the result as Arrow record batches.
     ///
     /// Each call to [`Iterator::next`] or [`ArrowQueryStream::next_batch`] on the
@@ -379,6 +396,19 @@ impl Connection {
         sql: &str,
     ) -> Result<crate::arrow_query_stream::ArrowQueryStream<'a>> {
         crate::arrow_query_stream::ArrowQueryStream::start_borrowed(self, sql)
+    }
+
+    /// Stream a query's result as Arrow record batches, with server-side named
+    /// parameter binding.
+    ///
+    /// Available when the crate is built with the `arrow` feature.
+    #[cfg(feature = "arrow")]
+    pub fn query_stream_arrow_with_params<'a>(
+        &'a mut self,
+        sql: &str,
+        params: &[(&str, &str)],
+    ) -> Result<crate::arrow_query_stream::ArrowQueryStream<'a>> {
+        crate::arrow_query_stream::ArrowQueryStream::start_borrowed_with_params(self, sql, params)
     }
 
     #[cfg(feature = "arrow")]

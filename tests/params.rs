@@ -98,3 +98,23 @@ fn a_missing_parameter_is_an_error_not_a_panic() {
         "expected QueryError, got {err:?}"
     );
 }
+
+#[test]
+fn a_format_stream_binds_parameters() {
+    let mut conn = Connection::open_in_memory().expect("open");
+
+    let mut stream = conn
+        .query_stream_with_params(
+            "SELECT number FROM numbers({n:UInt64})",
+            OutputFormat::TabSeparated,
+            &[("n", "5")],
+        )
+        .expect("stream");
+
+    let mut rows = 0usize;
+    while let Some(chunk) = stream.next_chunk().expect("chunk") {
+        rows += chunk.data_utf8_lossy().lines().count();
+    }
+
+    assert_eq!(rows, 5);
+}
