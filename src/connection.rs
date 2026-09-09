@@ -9,7 +9,7 @@ use crate::arrow_options::InsertOptions;
 #[cfg(feature = "arrow")]
 use crate::arrow_stream::{ArrowArray, ArrowSchema, ArrowStream};
 use crate::error::{Error, Result};
-use crate::format::OutputFormat;
+use crate::format::{InputFormat, OutputFormat};
 use crate::params::ParamArrays;
 use crate::query_result::QueryResult;
 use crate::query_stream::QueryStream;
@@ -413,6 +413,42 @@ impl Connection {
         params: &[(&str, &str)],
     ) -> Result<crate::arrow_query_stream::ArrowQueryStream<'a>> {
         crate::arrow_query_stream::ArrowQueryStream::start_borrowed_with_params(self, sql, params)
+    }
+
+    /// Open a streaming INSERT.
+    ///
+    /// The write-side counterpart of [`query_stream`](Self::query_stream): send
+    /// the INSERT statement here, then push the rows in chunks. The statement
+    /// must carry no `FORMAT` clause and no inline data — the format is the
+    /// `format` argument, and the data goes through
+    /// [`InsertStream::append`](crate::insert_stream::InsertStream::append).
+    ///
+    /// The connection is exclusively borrowed until the stream is finished,
+    /// cancelled or dropped, because it accepts no other statement meanwhile.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use chdb_rust::connection::Connection;
+    /// use chdb_rust::format::InputFormat;
+    ///
+    /// let mut conn = Connection::open_in_memory()?;
+    /// let mut ins = conn.insert_stream("INSERT INTO t (a, b)", InputFormat::CSV)?;
+    /// ins.append(b"1,\"one\"\n")?;
+    /// let stats = ins.finish()?;
+    /// # Ok::<(), chdb_rust::error::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::QueryError`] if the statement is invalid — a missing
+    /// table, say — which is reported when the stream is opened.
+    pub fn insert_stream<'a>(
+        &'a mut self,
+        sql: &str,
+        format: InputFormat,
+    ) -> Result<crate::insert_stream::InsertStream<'a>> {
+        crate::insert_stream::InsertStream::start(self, sql, format)
     }
 
     #[cfg(feature = "arrow")]
