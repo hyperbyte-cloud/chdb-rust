@@ -89,6 +89,7 @@ pub mod durable;
 pub mod error;
 pub mod format;
 pub mod log_level;
+pub(crate) mod params;
 pub mod query_result;
 pub mod query_stream;
 pub(crate) mod registry;
