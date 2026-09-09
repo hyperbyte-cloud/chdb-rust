@@ -10,7 +10,6 @@ use std::os::raw::c_char;
 ///
 /// Holds no ownership: the pointers reference the caller's `&str` data, which
 /// outlives the FFI call because the slice is borrowed for the whole call.
-#[allow(dead_code)]
 pub(crate) struct ParamArrays<'a> {
     names: Vec<*const c_char>,
     name_lens: Vec<usize>,
@@ -19,7 +18,6 @@ pub(crate) struct ParamArrays<'a> {
     _params: std::marker::PhantomData<&'a [(&'a str, &'a str)]>,
 }
 
-#[allow(dead_code)]
 impl<'a> ParamArrays<'a> {
     pub(crate) fn new(params: &'a [(&'a str, &'a str)]) -> Self {
         Self {

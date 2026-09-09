@@ -10,6 +10,7 @@ use crate::arrow_options::InsertOptions;
 use crate::arrow_stream::{ArrowArray, ArrowSchema, ArrowStream};
 use crate::error::{Error, Result};
 use crate::format::OutputFormat;
+use crate::params::ParamArrays;
 use crate::query_result::QueryResult;
 use crate::query_stream::QueryStream;
 use crate::{bindings, registry, CHDB_PROGRAM_NAME};
@@ -228,6 +229,80 @@ impl Connection {
 
         let result = QueryResult::new(result_ptr);
         result.check_error()
+    }
+
+    /// Execute a query with server-side named parameter binding.
+    ///
+    /// Placeholders are written `{name:Type}` in the SQL, and values are passed
+    /// to the engine as strings for it to parse according to the declared type.
+    /// Values are never interpolated into the SQL text, so a value cannot alter
+    /// the statement's structure.
+    ///
+    /// # Arguments
+    ///
+    /// * `sql` - Query text containing `{name:Type}` placeholders
+    /// * `format` - Output format for the result
+    /// * `params` - Name/value pairs; names must match the placeholders
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use chdb_rust::connection::Connection;
+    /// use chdb_rust::format::OutputFormat;
+    ///
+    /// let conn = Connection::open_in_memory()?;
+    /// let result = conn.query_with_params(
+    ///     "SELECT {x:Int64} + 1 AS v",
+    ///     OutputFormat::JSONEachRow,
+    ///     &[("x", "41")],
+    /// )?;
+    /// # Ok::<(), chdb_rust::error::Error>(())
+    /// ```
+    ///
+    /// # Notes
+    ///
+    /// On a duplicate name the last value wins, which is the engine's own
+    /// `NameToNameMap` behaviour. Bindings are scoped to this single call.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::QueryError`] if a placeholder has no matching parameter,
+    /// if a value does not parse as its declared type, or if the query fails.
+    pub fn query_with_params(
+        &self,
+        sql: &str,
+        format: OutputFormat,
+        params: &[(&str, &str)],
+    ) -> Result<QueryResult> {
+        let conn = unsafe { *self.inner };
+        let format = format.as_str();
+        let p = ParamArrays::new(params);
+
+        // Wraps chdb_query_with_params_n. The parameter arrays borrow `params`,
+        // which outlives the call; the engine clears the bindings on return.
+        // It returns an owned chdb_result handle (or null on failure):
+        // QueryResult::new below takes ownership of that pointer, and
+        // QueryResult's Drop impl frees it via chdb_destroy_query_result.
+        let result_ptr = unsafe {
+            bindings::chdb_query_with_params_n(
+                conn,
+                sql.as_ptr() as *const c_char,
+                sql.len(),
+                format.as_ptr() as *const c_char,
+                format.len(),
+                p.names(),
+                p.name_lens(),
+                p.values(),
+                p.value_lens(),
+                p.count(),
+            )
+        };
+
+        if result_ptr.is_null() {
+            return Err(Error::NoResult);
+        }
+
+        QueryResult::new(result_ptr).check_error()
     }
 
     /// Execute a query and return a streaming result.
