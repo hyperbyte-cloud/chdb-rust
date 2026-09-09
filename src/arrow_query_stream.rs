@@ -6,8 +6,9 @@
 //!
 //! Available when the crate is built with the `arrow` feature.
 
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::mem::ManuallyDrop;
+use std::os::raw::c_char;
 
 use arrow::ffi::FFI_ArrowSchema;
 use arrow::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
@@ -67,10 +68,13 @@ impl<'a> ArrowQueryStream<'a> {
         conn: bindings::chdb_connection,
         sql: &str,
     ) -> Result<*mut bindings::chdb_result> {
-        let query_cstr = CString::new(sql)?;
-
         let stream_ptr = unsafe {
-            bindings::chdb_stream_query_arrow(conn, query_cstr.as_ptr(), std::ptr::null())
+            bindings::chdb_stream_query_arrow_n(
+                conn,
+                sql.as_ptr() as *const c_char,
+                sql.len(),
+                std::ptr::null(),
+            )
         };
 
         if stream_ptr.is_null() {

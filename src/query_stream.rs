@@ -3,8 +3,10 @@
 //! This module provides the [`QueryStream`] type for reading large query results
 //! in chunks without materializing the entire output in memory.
 
+#[cfg(test)]
 use std::ffi::CString;
 use std::mem::ManuallyDrop;
+use std::os::raw::c_char;
 
 use crate::bindings;
 use crate::connection::Connection;
@@ -85,11 +87,16 @@ impl<'a> QueryStream<'a> {
         sql: &str,
         format: OutputFormat,
     ) -> Result<*mut bindings::chdb_result> {
-        let query_cstr = CString::new(sql)?;
-        let format_cstr = CString::new(format.as_str())?;
-
-        let stream_ptr =
-            unsafe { bindings::chdb_stream_query(conn, query_cstr.as_ptr(), format_cstr.as_ptr()) };
+        let format = format.as_str();
+        let stream_ptr = unsafe {
+            bindings::chdb_stream_query_n(
+                conn,
+                sql.as_ptr() as *const c_char,
+                sql.len(),
+                format.as_ptr() as *const c_char,
+                format.len(),
+            )
+        };
 
         if stream_ptr.is_null() {
             return Err(Error::NoResult);

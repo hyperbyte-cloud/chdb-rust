@@ -204,13 +204,20 @@ impl Connection {
     /// - The query references non-existent tables or columns
     /// - The query execution fails for any other reason
     pub fn query(&self, sql: &str, format: OutputFormat) -> Result<QueryResult> {
-        let query_cstr = CString::new(sql)?;
-        let format_cstr = CString::new(format.as_str())?;
-
-        // chdb_query takes chdb_connection (which is *mut chdb_connection_)
         let conn = unsafe { *self.inner };
-        let result_ptr =
-            unsafe { bindings::chdb_query(conn, query_cstr.as_ptr(), format_cstr.as_ptr()) };
+        let format = format.as_str();
+
+        // chdb_query_n takes pointer + length for both strings, so neither has
+        // to be NUL-terminated and neither is copied.
+        let result_ptr = unsafe {
+            bindings::chdb_query_n(
+                conn,
+                sql.as_ptr() as *const c_char,
+                sql.len(),
+                format.as_ptr() as *const c_char,
+                format.len(),
+            )
+        };
 
         if result_ptr.is_null() {
             return Err(Error::NoResult);
