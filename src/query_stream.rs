@@ -88,6 +88,13 @@ impl<'a> QueryStream<'a> {
         format: OutputFormat,
     ) -> Result<*mut bindings::chdb_result> {
         let format = format.as_str();
+        // chdb_stream_query_n takes pointer + length for both strings, so
+        // neither has to be NUL-terminated. It returns an owned streaming
+        // chdb_result handle (or null on failure) that the caller must both
+        // cancel with chdb_stream_cancel_query and free with
+        // chdb_destroy_query_result once done — QueryStream::cancel (called
+        // from Drop) does both. The probe below only inspects the handle for
+        // a start-up error; it does not take ownership of it.
         let stream_ptr = unsafe {
             bindings::chdb_stream_query_n(
                 conn,

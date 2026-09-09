@@ -208,7 +208,10 @@ impl Connection {
         let format = format.as_str();
 
         // chdb_query_n takes pointer + length for both strings, so neither has
-        // to be NUL-terminated and neither is copied.
+        // to be NUL-terminated and neither is copied. It returns an owned
+        // chdb_result handle (or null on failure): QueryResult::new below takes
+        // ownership of that pointer, and QueryResult's Drop impl frees it via
+        // chdb_destroy_query_result.
         let result_ptr = unsafe {
             bindings::chdb_query_n(
                 conn,

@@ -68,6 +68,15 @@ impl<'a> ArrowQueryStream<'a> {
         conn: bindings::chdb_connection,
         sql: &str,
     ) -> Result<*mut bindings::chdb_result> {
+        // chdb_stream_query_arrow_n takes pointer + length for the query text,
+        // so it does not have to be NUL-terminated; the null third argument is
+        // the (currently unused) options pointer, meaning "use default Arrow
+        // stream options". It returns an owned streaming chdb_result handle
+        // (or null on failure) that the caller must both cancel with
+        // chdb_stream_cancel_query and free with chdb_destroy_query_result
+        // once done — ArrowQueryStream::cancel (called from Drop) does both.
+        // The probe below only inspects the handle for a start-up error; it
+        // does not take ownership of it.
         let stream_ptr = unsafe {
             bindings::chdb_stream_query_arrow_n(
                 conn,
