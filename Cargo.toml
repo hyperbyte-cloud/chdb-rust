@@ -45,6 +45,7 @@ tar = "0.4"
 
 [dev-dependencies]
 arrow = { version = "59", features = ["ffi", "prettyprint", "ipc_compression"] }
+libc = "0.2"
 tempdir = "0.3.7"
 tempfile = "3"
 

@@ -126,17 +126,18 @@ fn cases() -> Vec<Case> {
             run: exit_after_close,
         },
         // --- Group 5: process lifecycle ------------------------------------
-        // Signal handlers are installed process-wide on first connect, so the
-        // preference can only be set before then.
+        // Signal handlers are re-installed at the start of every query, not
+        // once at engine start, so the preference can be set at any time —
+        // but only if disabling also resets what is already installed.
         Case {
             name: "signal_handlers_before_connect",
             expect: "ok\n",
             run: signal_handlers_before_connect,
         },
         Case {
-            name: "signal_handlers_after_connect_is_refused",
-            expect: "refused\n",
-            run: signal_handlers_after_connect_is_refused,
+            name: "disabling_after_connect_takes_effect",
+            expect: "ok\n",
+            run: disabling_after_connect_takes_effect,
         },
     ];
 
@@ -461,9 +462,10 @@ fn arrow_release_callback() {
     println!("inserted={rows}|sum={sum}|released");
 }
 
-/// Disabling handlers before any connection is the supported order.
+/// Disabling handlers before any connection is the cleanest order: no query
+/// ever runs with them installed.
 fn signal_handlers_before_connect() {
-    chdb_rust::runtime::signal_handlers(false).expect("before any connect");
+    chdb_rust::runtime::signal_handlers(false);
     let conn = Connection::open_in_memory().expect("open");
     let result = conn
         .query("SELECT 1", OutputFormat::TabSeparated)
@@ -472,14 +474,49 @@ fn signal_handlers_before_connect() {
     println!("ok");
 }
 
-/// Once the engine is up the preference cannot be changed, and saying so is
-/// better than a call the engine silently ignores.
-fn signal_handlers_after_connect_is_refused() {
-    let _conn = Connection::open_in_memory().expect("open");
-    match chdb_rust::runtime::signal_handlers(false) {
-        Err(Error::EngineAlreadyStarted) => println!("refused"),
-        other => panic!("expected EngineAlreadyStarted, got {other:?}"),
-    }
+/// The deadly-signal disposition for `sig`, read via `sigaction` with a null
+/// `act` — a query, not a change.
+fn signal_disposition(sig: libc::c_int) -> libc::sighandler_t {
+    let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
+    // Wraps sigaction(2). A null `act` with a non-null `oldact` only reads
+    // the current disposition; it changes nothing.
+    let rc = unsafe { libc::sigaction(sig, std::ptr::null(), &mut old) };
+    assert_eq!(
+        rc,
+        0,
+        "sigaction query failed: {}",
+        std::io::Error::last_os_error()
+    );
+    old.sa_sigaction
+}
+
+/// Handlers are re-installed at the start of every query (not once at engine
+/// start), so disabling them has to both reset what chDB already installed
+/// and stick for the queries that follow. The second disposition check after
+/// another query is the one that would catch a disable that did not stick.
+fn disabling_after_connect_takes_effect() {
+    let conn = Connection::open_in_memory().expect("open");
+    // A trivial query so the engine installs its deadly-signal handlers.
+    let _ = scalar_row_on(&conn, "SELECT 1");
+
+    chdb_rust::runtime::signal_handlers(false);
+    assert_eq!(
+        signal_disposition(libc::SIGSEGV),
+        libc::SIG_DFL,
+        "disabling should reset the handler chDB just installed"
+    );
+
+    // One more query: if the disable flag did not stick, this re-installs
+    // the handler and the disposition below would no longer be SIG_DFL.
+    let result = scalar_row_on(&conn, "SELECT 2");
+    assert_eq!(result, "2");
+    assert_eq!(
+        signal_disposition(libc::SIGSEGV),
+        libc::SIG_DFL,
+        "disabling should stay in effect across the next query"
+    );
+
+    println!("ok");
 }
 
 /// A scratch directory named `suffix`, removed if a previous run left one.
