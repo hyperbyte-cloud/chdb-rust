@@ -139,6 +139,16 @@ fn cases() -> Vec<Case> {
             expect: "ok\n",
             run: disabling_after_connect_takes_effect,
         },
+        Case {
+            name: "shutdown_refuses_while_a_connection_is_open",
+            expect: "refused|ok\n",
+            run: shutdown_refuses_while_a_connection_is_open,
+        },
+        Case {
+            name: "connect_after_shutdown_is_refused",
+            expect: "shutdown|refused|idempotent\n",
+            run: connect_after_shutdown_is_refused,
+        },
     ];
 
     // The release callback in the Arrow C Data Interface frees memory that was
@@ -517,6 +527,40 @@ fn disabling_after_connect_takes_effect() {
     );
 
     println!("ok");
+}
+
+/// Tearing the engine down under a live connection would leave it dangling, so
+/// the engine refuses; the count says how many handles are in the way.
+fn shutdown_refuses_while_a_connection_is_open() {
+    let conn = Connection::open_in_memory().expect("open");
+
+    match chdb_rust::runtime::shutdown() {
+        Err(Error::ConnectionsStillOpen { count: 1 }) => print!("refused|"),
+        other => panic!("expected ConnectionsStillOpen {{ count: 1 }}, got {other:?}"),
+    }
+
+    drop(conn);
+    chdb_rust::runtime::shutdown().expect("shutdown with nothing open");
+    println!("ok");
+}
+
+/// Shutdown is one-way: the library is closed for the rest of the process, and
+/// a later open says so rather than failing as a null connection.
+fn connect_after_shutdown_is_refused() {
+    let conn = Connection::open_in_memory().expect("open");
+    drop(conn);
+
+    chdb_rust::runtime::shutdown().expect("shutdown");
+    print!("shutdown|");
+
+    match Connection::open_in_memory() {
+        Err(Error::EngineShutDown) => print!("refused|"),
+        other => panic!("expected EngineShutDown, got {other:?}"),
+    }
+
+    // The engine treats a repeat shutdown as success, and so does this.
+    chdb_rust::runtime::shutdown().expect("second shutdown is a no-op");
+    println!("idempotent");
 }
 
 /// A scratch directory named `suffix`, removed if a previous run left one.

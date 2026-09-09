@@ -79,6 +79,10 @@ impl Connection {
     /// Returns [`Error::ConnectionFailed`] if the
     /// connection cannot be established.
     pub fn open(args: &[&str]) -> Result<Self> {
+        // A post-shutdown connect fails inside the engine as a null connection
+        // and nothing else, so it is caught here where the reason is known.
+        crate::runtime::ensure_running()?;
+
         let c_args: Vec<CString> = std::iter::once(CHDB_PROGRAM_NAME)
             .chain(args.iter().copied())
             .map(CString::new)

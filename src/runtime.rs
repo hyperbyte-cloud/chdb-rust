@@ -5,7 +5,11 @@
 //! matter to a host that has its own signal handling or its own teardown
 //! sequence, so the controls for them live here.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crate::bindings;
+use crate::error::{Error, Result};
+use crate::registry;
 
 /// Choose whether chDB installs process-wide signal handlers.
 ///
@@ -50,4 +54,61 @@ pub fn reset_signal_handlers() {
     // Wraps chdb_reset_signal_handlers. Safe at any time; resets disposition
     // only, does not touch the disable flag.
     unsafe { bindings::chdb_reset_signal_handlers() };
+}
+
+/// Set once a shutdown has actually succeeded. Only then is the library closed
+/// for the process — a refused shutdown must leave it usable.
+static SHUT_DOWN: AtomicBool = AtomicBool::new(false);
+
+/// Stop the engine, joining every thread chDB started.
+///
+/// Call this before a host teardown sequence of its own — global destructors, a
+/// finalizing language runtime, a sanitizer exit handler — which would
+/// otherwise race the engine's still-running threads. A process that simply
+/// exits does not need it.
+///
+/// This is one-way. Once it succeeds, no further connection can be opened in
+/// this process. Calling it again is harmless.
+///
+/// # Errors
+///
+/// Returns [`Error::ConnectionsStillOpen`] if any connection is open, and
+/// [`Error::Unknown`] if the engine could not stop every thread.
+///
+/// # Examples
+///
+/// ```no_run
+/// let conn = chdb_rust::connection::Connection::open_in_memory()?;
+/// drop(conn);
+/// chdb_rust::runtime::shutdown()?;
+/// # Ok::<(), chdb_rust::error::Error>(())
+/// ```
+pub fn shutdown() -> Result<()> {
+    if SHUT_DOWN.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+
+    let count = registry::refs();
+    if count != 0 {
+        return Err(Error::ConnectionsStillOpen { count });
+    }
+
+    // Wraps chdb_shutdown. Refuses while the engine holds a connection, which
+    // the check above should already have caught; a refusal here means some
+    // other crate in this process holds one.
+    let state = unsafe { bindings::chdb_shutdown() };
+    if state != bindings::chdb_state_CHDBSuccess {
+        return Err(Error::Unknown);
+    }
+
+    SHUT_DOWN.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+/// Whether a new connection may still be opened.
+pub(crate) fn ensure_running() -> Result<()> {
+    if SHUT_DOWN.load(Ordering::SeqCst) {
+        return Err(Error::EngineShutDown);
+    }
+    Ok(())
 }
