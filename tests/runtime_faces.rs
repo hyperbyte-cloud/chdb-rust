@@ -125,6 +125,19 @@ fn cases() -> Vec<Case> {
             expect: "first=1|second=2\n",
             run: exit_after_close,
         },
+        // --- Group 5: process lifecycle ------------------------------------
+        // Signal handlers are installed process-wide on first connect, so the
+        // preference can only be set before then.
+        Case {
+            name: "signal_handlers_before_connect",
+            expect: "ok\n",
+            run: signal_handlers_before_connect,
+        },
+        Case {
+            name: "signal_handlers_after_connect_is_refused",
+            expect: "refused\n",
+            run: signal_handlers_after_connect_is_refused,
+        },
     ];
 
     // The release callback in the Arrow C Data Interface frees memory that was
@@ -446,6 +459,27 @@ fn arrow_release_callback() {
 
     let sum = scalar_row_on(session.connection(), "SELECT sum(x) FROM d.t");
     println!("inserted={rows}|sum={sum}|released");
+}
+
+/// Disabling handlers before any connection is the supported order.
+fn signal_handlers_before_connect() {
+    chdb_rust::runtime::signal_handlers(false).expect("before any connect");
+    let conn = Connection::open_in_memory().expect("open");
+    let result = conn
+        .query("SELECT 1", OutputFormat::TabSeparated)
+        .expect("query");
+    assert_eq!(result.data_utf8_lossy().trim(), "1");
+    println!("ok");
+}
+
+/// Once the engine is up the preference cannot be changed, and saying so is
+/// better than a call the engine silently ignores.
+fn signal_handlers_after_connect_is_refused() {
+    let _conn = Connection::open_in_memory().expect("open");
+    match chdb_rust::runtime::signal_handlers(false) {
+        Err(Error::EngineAlreadyStarted) => println!("refused"),
+        other => panic!("expected EngineAlreadyStarted, got {other:?}"),
+    }
 }
 
 /// A scratch directory named `suffix`, removed if a previous run left one.

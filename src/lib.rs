@@ -93,6 +93,7 @@ pub(crate) mod params;
 pub mod query_result;
 pub mod query_stream;
 pub(crate) mod registry;
+pub mod runtime;
 pub mod session;
 pub mod version;
 

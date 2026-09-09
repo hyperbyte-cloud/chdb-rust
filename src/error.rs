@@ -63,6 +63,17 @@ pub enum Error {
     /// scheme, and so not a substitute.
     #[error("the linked libchdb does not export chdb_version(); it predates chdb-core v26.7.0")]
     EngineVersionUnavailable,
+    /// A runtime preference was set after the engine had already started.
+    ///
+    /// `chdb_set_signal_handlers_enabled` takes effect only before the first
+    /// connection, because the handlers are installed as the engine comes up.
+    /// Calling it later does nothing, so it is refused here rather than
+    /// silently ignored there.
+    #[error(
+        "the engine is already running; signal handler preferences must be set \
+         before the first connection is opened"
+    )]
+    EngineAlreadyStarted,
     /// A query execution error occurred.
     ///
     /// This contains the error message from the underlying chDB library,
