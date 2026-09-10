@@ -4,6 +4,8 @@
 
 use std::ffi::{c_char, CString};
 
+#[cfg(feature = "arrow")]
+use crate::arrow_options::ArrowOptions;
 #[cfg(all(feature = "arrow", direct_arrow_insert))]
 use crate::arrow_options::InsertOptions;
 #[cfg(feature = "arrow")]
@@ -399,7 +401,7 @@ impl Connection {
         &'a mut self,
         sql: &str,
     ) -> Result<crate::arrow_query_stream::ArrowQueryStream<'a>> {
-        crate::arrow_query_stream::ArrowQueryStream::start_borrowed(self, sql)
+        crate::arrow_query_stream::ArrowQueryStream::start_borrowed(self, sql, None)
     }
 
     /// Stream a query's result as Arrow record batches, with server-side named
@@ -412,7 +414,95 @@ impl Connection {
         sql: &str,
         params: &[(&str, &str)],
     ) -> Result<crate::arrow_query_stream::ArrowQueryStream<'a>> {
-        crate::arrow_query_stream::ArrowQueryStream::start_borrowed_with_params(self, sql, params)
+        crate::arrow_query_stream::ArrowQueryStream::start_borrowed_with_params(
+            self, sql, params, None,
+        )
+    }
+
+    /// Execute a query and take the whole result as one Arrow stream.
+    ///
+    /// Zero-copy where the engine can manage it: no IPC serialization and no
+    /// compression round-trip. Prefer
+    /// [`query_stream_arrow`](Self::query_stream_arrow) when the result is too
+    /// large to hold at once.
+    ///
+    /// Available when the crate is built with the `arrow` feature.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use arrow::array::RecordBatchReader;
+    /// use chdb_rust::connection::Connection;
+    ///
+    /// let conn = Connection::open_in_memory()?;
+    /// let reader = conn.query_arrow("SELECT number FROM numbers(1000)")?;
+    /// for batch in reader {
+    ///     println!("rows: {}", batch?.num_rows());
+    /// }
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[cfg(feature = "arrow")]
+    pub fn query_arrow(&self, sql: &str) -> Result<arrow::ffi_stream::ArrowArrayStreamReader> {
+        self.query_arrow_inner(sql, None)
+    }
+
+    /// [`query_arrow`](Self::query_arrow) with explicit type-mapping options.
+    #[cfg(feature = "arrow")]
+    pub fn query_arrow_with_opts(
+        &self,
+        sql: &str,
+        opts: &ArrowOptions,
+    ) -> Result<arrow::ffi_stream::ArrowArrayStreamReader> {
+        self.query_arrow_inner(sql, Some(opts))
+    }
+
+    #[cfg(feature = "arrow")]
+    fn query_arrow_inner(
+        &self,
+        sql: &str,
+        opts: Option<&ArrowOptions>,
+    ) -> Result<arrow::ffi_stream::ArrowArrayStreamReader> {
+        use arrow::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
+
+        let conn = unsafe { *self.inner };
+        let c_opts = opts.map(|o| o.to_c());
+        let opts_ptr = c_opts.as_ref().map_or(std::ptr::null(), |o| {
+            o as *const bindings::chdb_arrow_options
+        });
+
+        let mut ffi_stream = FFI_ArrowArrayStream::empty();
+
+        // Wraps chdb_query_arrow_n. The engine fills `ffi_stream` and transfers
+        // ownership of its release callback; the returned chdb_result carries
+        // only metrics and an error slot, and is destroyed here.
+        let result_ptr = unsafe {
+            bindings::chdb_query_arrow_n(
+                conn,
+                sql.as_ptr() as *const c_char,
+                sql.len(),
+                (&mut ffi_stream as *mut FFI_ArrowArrayStream).cast(),
+                opts_ptr,
+            )
+        };
+
+        if result_ptr.is_null() {
+            return Err(Error::NoResult);
+        }
+        // Freed when it drops; the data lives in `ffi_stream`, not in it.
+        QueryResult::new(result_ptr).check_error()?;
+
+        ArrowArrayStreamReader::try_new(ffi_stream).map_err(|e| Error::InvalidData(e.to_string()))
+    }
+
+    /// Stream a query's result as Arrow record batches with explicit
+    /// type-mapping options.
+    #[cfg(feature = "arrow")]
+    pub fn query_stream_arrow_with_opts<'a>(
+        &'a mut self,
+        sql: &str,
+        opts: &ArrowOptions,
+    ) -> Result<crate::arrow_query_stream::ArrowQueryStream<'a>> {
+        crate::arrow_query_stream::ArrowQueryStream::start_borrowed_with_opts(self, sql, opts)
     }
 
     /// Open a streaming INSERT.

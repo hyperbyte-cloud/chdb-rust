@@ -61,7 +61,7 @@ pub use arrow_insert::{
     insert_record_batches,
 };
 #[cfg(feature = "arrow")]
-pub use arrow_options::InsertOptions;
+pub use arrow_options::{ArrowOptions, InsertOptions};
 #[cfg(feature = "arrow")]
 pub use arrow_stream::arrow_stream_table_sql;
 #[allow(
@@ -243,5 +243,5 @@ pub fn execute_stream(query: &str, query_args: Option<&[Arg]>) -> Result<QuerySt
 #[cfg(feature = "arrow")]
 pub fn execute_stream_arrow(query: &str) -> Result<ArrowQueryStream<'static>> {
     let conn = Connection::open_in_memory()?;
-    ArrowQueryStream::start_owned(conn, query)
+    ArrowQueryStream::start_owned(conn, query, None)
 }

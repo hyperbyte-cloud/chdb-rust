@@ -14,6 +14,7 @@ use arrow::ffi::FFI_ArrowSchema;
 use arrow::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
 use arrow::record_batch::RecordBatch;
 
+use crate::arrow_options::ArrowOptions;
 use crate::bindings;
 use crate::connection::Connection;
 use crate::error::{Error, Result};
@@ -46,8 +47,12 @@ pub struct ArrowQueryStream<'a> {
 }
 
 impl<'a> ArrowQueryStream<'a> {
-    pub(crate) fn start_borrowed(conn: &'a mut Connection, sql: &str) -> Result<Self> {
-        let inner = Self::start_query(conn.handle(), sql)?;
+    pub(crate) fn start_borrowed(
+        conn: &'a mut Connection,
+        sql: &str,
+        opts: Option<&ArrowOptions>,
+    ) -> Result<Self> {
+        let inner = Self::start_query(conn.handle(), sql, opts)?;
         Ok(Self {
             conn: ArrowQueryStreamConnection::Borrowed(conn),
             inner,
@@ -55,8 +60,12 @@ impl<'a> ArrowQueryStream<'a> {
         })
     }
 
-    pub(crate) fn start_owned(conn: Connection, sql: &str) -> Result<Self> {
-        let inner = Self::start_query(conn.handle(), sql)?;
+    pub(crate) fn start_owned(
+        conn: Connection,
+        sql: &str,
+        opts: Option<&ArrowOptions>,
+    ) -> Result<Self> {
+        let inner = Self::start_query(conn.handle(), sql, opts)?;
         Ok(Self {
             conn: ArrowQueryStreamConnection::Owned(conn),
             inner,
@@ -68,8 +77,22 @@ impl<'a> ArrowQueryStream<'a> {
         conn: &'a mut Connection,
         sql: &str,
         params: &[(&str, &str)],
+        opts: Option<&ArrowOptions>,
     ) -> Result<Self> {
-        let inner = Self::start_query_with_params(conn.handle(), sql, params)?;
+        let inner = Self::start_query_with_params(conn.handle(), sql, params, opts)?;
+        Ok(Self {
+            conn: ArrowQueryStreamConnection::Borrowed(conn),
+            inner,
+            finished: false,
+        })
+    }
+
+    pub(crate) fn start_borrowed_with_opts(
+        conn: &'a mut Connection,
+        sql: &str,
+        opts: &ArrowOptions,
+    ) -> Result<Self> {
+        let inner = Self::start_query(conn.handle(), sql, Some(opts))?;
         Ok(Self {
             conn: ArrowQueryStreamConnection::Borrowed(conn),
             inner,
@@ -80,43 +103,62 @@ impl<'a> ArrowQueryStream<'a> {
     fn start_query(
         conn: bindings::chdb_connection,
         sql: &str,
+        opts: Option<&ArrowOptions>,
     ) -> Result<*mut bindings::chdb_result> {
         // chdb_stream_query_arrow_n takes pointer + length for the query text,
-        // so it does not have to be NUL-terminated; the null third argument is
-        // the (currently unused) options pointer, meaning "use default Arrow
-        // stream options". It returns an owned streaming chdb_result handle
-        // (or null on failure) that the caller must both cancel with
-        // chdb_stream_cancel_query and free with chdb_destroy_query_result
-        // once done — ArrowQueryStream::cancel (called from Drop) does both.
-        // The probe below only inspects the handle for a start-up error; it
-        // does not take ownership of it.
+        // so it does not have to be NUL-terminated. The C struct must outlive
+        // the call, so it is materialized here rather than in a temporary
+        // inside the argument list; a null options pointer asks for the
+        // engine's default type mapping. It returns an owned streaming
+        // chdb_result handle (or null on failure) that the caller must both
+        // cancel with chdb_stream_cancel_query and free with
+        // chdb_destroy_query_result once done — ArrowQueryStream::cancel
+        // (called from Drop) does both. The probe below only inspects the
+        // handle for a start-up error; it does not take ownership of it.
+        let c_opts = opts.map(|o| o.to_c());
+        let opts_ptr = c_opts.as_ref().map_or(std::ptr::null(), |o| {
+            o as *const bindings::chdb_arrow_options
+        });
+
         let stream_ptr = unsafe {
             bindings::chdb_stream_query_arrow_n(
                 conn,
                 sql.as_ptr() as *const c_char,
                 sql.len(),
-                std::ptr::null(),
+                opts_ptr,
             )
         };
 
         Self::check_start(stream_ptr)
     }
 
-    /// Wraps `chdb_stream_query_arrow_with_params_n`. The null options pointer
-    /// asks for the engine's default type mapping.
+    /// Wraps `chdb_stream_query_arrow_with_params_n`. A null options pointer
+    /// asks for the engine's default type mapping. It returns an owned
+    /// streaming `chdb_result` handle (or null on failure) that the caller
+    /// must both cancel with `chdb_stream_cancel_query` and free with
+    /// `chdb_destroy_query_result` once done — `ArrowQueryStream::cancel`
+    /// (called from `Drop`) does both.
     fn start_query_with_params(
         conn: bindings::chdb_connection,
         sql: &str,
         params: &[(&str, &str)],
+        opts: Option<&ArrowOptions>,
     ) -> Result<*mut bindings::chdb_result> {
         let p = crate::params::ParamArrays::new(params);
+
+        // The C struct must outlive the call, so it is materialized here
+        // rather than in a temporary inside the argument list.
+        let c_opts = opts.map(|o| o.to_c());
+        let opts_ptr = c_opts.as_ref().map_or(std::ptr::null(), |o| {
+            o as *const bindings::chdb_arrow_options
+        });
 
         let stream_ptr = unsafe {
             bindings::chdb_stream_query_arrow_with_params_n(
                 conn,
                 sql.as_ptr() as *const c_char,
                 sql.len(),
-                std::ptr::null(),
+                opts_ptr,
                 p.names(),
                 p.name_lens(),
                 p.values(),
