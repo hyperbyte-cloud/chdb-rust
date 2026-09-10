@@ -10,9 +10,19 @@ Experimental [chDB](https://github.com/chdb-io/chdb) FFI bindings for Rust.
 
 ## Features
 
-- **Parameter binding**: `{name:Type}` placeholders bound server-side — values are never interpolated into SQL
+- **Stateless queries**: Execute one-off queries without persistent storage
+- **Stateful sessions**: Create databases and tables with persistent storage
+- **Multiple output formats**: JSON, CSV, TabSeparated, and more
+- **Query result streaming**: Read large result sets in chunks with constant memory
+- **Parameter binding**: `{name:Type}` placeholders bound server-side across buffered, streaming and Arrow-streaming queries — values are never interpolated into SQL
 - **Streaming INSERT**: push rows in chunks in any input format, with engine backpressure
-- **One-shot Arrow export**: take a whole result as an Arrow stream, zero-copy where possible
+- **Arrow bulk insert** (feature `arrow`, on by default): register in-memory Arrow data and insert via `ArrowStream('name')`
+- **Arrow batch streaming** (with the `arrow` feature): stream query results as `RecordBatch` values via the Arrow C Data Interface
+- **One-shot Arrow export** (with the `arrow` feature): take a whole result as an Arrow stream, zero-copy where possible
+- **Thread-safe**: Connections and results can be safely sent between threads
+- **Version accessors**: which chdb-core release is linked, where it came from, and which ClickHouse it carries
+- **Backup, restore and statement analysis**: the chdb-core management ABI, on any engine that exports it
+- **Durable objects** (feature `durable`): a database whose authoritative state is a checkpoint plus a statement WAL in storage you own
 - **Runtime control**: decline chDB's process-wide signal handlers, and shut the engine down cleanly
 
 ## Documentation
