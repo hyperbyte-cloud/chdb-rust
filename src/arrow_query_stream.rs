@@ -25,32 +25,26 @@ enum ArrowQueryStreamConnection<'a> {
     Owned(Connection),
 }
 
-/// A one-shot Arrow reader over a query's entire result, borrowed from the
-/// [`Connection`] that produced it.
+/// A one-shot Arrow reader over a query's entire result.
 ///
 /// Returned by [`Connection::query_arrow`](crate::connection::Connection::query_arrow)
 /// and [`Connection::query_arrow_with_opts`](crate::connection::Connection::query_arrow_with_opts).
 ///
-/// The engine buffers behind the underlying Arrow C Data Interface stream
-/// belong to the connection that produced them, so this reader must be
-/// drained or dropped before the connection is — the `'a` borrow enforces
-/// that at compile time, the same way [`ArrowQueryStream`]'s borrowed variant
-/// does for the streaming path.
-pub struct ArrowReader<'a> {
+/// The C ABI transfers ownership of the stream's `release` callback to the
+/// caller. The engine materializes a standalone Arrow table, so this reader
+/// does not borrow the [`Connection`] that produced it and can be drained
+/// after that connection is dropped.
+pub struct ArrowReader {
     inner: ArrowArrayStreamReader,
-    _conn: std::marker::PhantomData<&'a Connection>,
 }
 
-impl<'a> ArrowReader<'a> {
+impl ArrowReader {
     pub(crate) fn new(inner: ArrowArrayStreamReader) -> Self {
-        Self {
-            inner,
-            _conn: std::marker::PhantomData,
-        }
+        Self { inner }
     }
 }
 
-impl Iterator for ArrowReader<'_> {
+impl Iterator for ArrowReader {
     type Item = arrow::error::Result<RecordBatch>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -58,7 +52,7 @@ impl Iterator for ArrowReader<'_> {
     }
 }
 
-impl arrow::array::RecordBatchReader for ArrowReader<'_> {
+impl arrow::array::RecordBatchReader for ArrowReader {
     fn schema(&self) -> arrow::datatypes::SchemaRef {
         self.inner.schema()
     }

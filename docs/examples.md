@@ -16,6 +16,7 @@ This document provides simple and easy-to-follow examples for using chdb-rust, a
 10. [Parameter Binding](#parameter-binding)
 11. [Streaming INSERT](#streaming-insert)
 12. [One-Shot Arrow Export](#one-shot-arrow-export)
+13. [Runtime Control](#runtime-control)
 
 ## Basic Setup
 
@@ -599,6 +600,36 @@ let reader = conn.query_arrow_with_opts("SELECT ...", &opts)?;
 Prefer `query_stream_arrow` instead when the result is too large to hold at once.
 
 See `examples/15_arrow_query.rs` for a runnable program.
+
+## Runtime Control
+
+chDB installs process-wide signal handlers and starts threads that outlive a dropped connection. `chdb_rust::runtime` is the control surface for both.
+
+```rust
+use chdb_rust::connection::Connection;
+use chdb_rust::format::OutputFormat;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Durable opt-out: the engine will not install deadly-signal handlers.
+    chdb_rust::runtime::signal_handlers(false);
+
+    let conn = Connection::open_in_memory()?;
+    let result = conn.query("SELECT 1 + 1 AS sum", OutputFormat::TabSeparated)?;
+    println!("sum={}", result.data_utf8_lossy().trim());
+
+    // Restore SIG_DFL without setting the disable flag. Subsequent queries
+    // on this connection do not put the handlers back; a later connect might.
+    chdb_rust::runtime::reset_signal_handlers();
+
+    drop(conn);
+    chdb_rust::runtime::shutdown()?;
+    Ok(())
+}
+```
+
+Call `shutdown` before a host teardown sequence of its own — global destructors, a finalizing language runtime, a sanitizer exit handler. A process that simply exits does not need it. Once it succeeds, no further connection can be opened in this process.
+
+See `examples/16_runtime.rs` for a runnable program.
 
 ## Additional Resources
 

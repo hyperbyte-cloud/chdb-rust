@@ -39,6 +39,22 @@ fn a_one_shot_query_returns_every_row() {
     assert_eq!(rows, 1000);
 }
 
+/// The C ABI transfers ownership of `out_stream->release` to the caller; the
+/// engine materializes a standalone Arrow table. Dropping the connection
+/// before draining the reader must still yield every row. If this fails at
+/// runtime, the `'a` borrow on `ArrowReader` is a real hazard and must stay.
+#[test]
+fn a_one_shot_reader_outlives_its_connection() {
+    let conn = Connection::open_in_memory().expect("open");
+    let reader = conn
+        .query_arrow("SELECT number FROM numbers(1000)")
+        .expect("query_arrow");
+    drop(conn);
+
+    let rows: usize = reader.map(|b| b.expect("batch").num_rows()).sum();
+    assert_eq!(rows, 1000);
+}
+
 #[test]
 fn a_one_shot_query_matches_the_streamed_result() {
     let mut conn = Connection::open_in_memory().expect("open");

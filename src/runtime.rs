@@ -13,14 +13,14 @@ use crate::registry;
 
 /// Choose whether chDB installs process-wide signal handlers.
 ///
-/// May be called at any time, not just before the first connection. chDB
-/// re-installs its deadly-signal handlers at the start of every query
-/// (`setupCommonDeadlySignalHandlers`, idempotent), consulting a process-wide
-/// flag each time. Passing `false` here sets that flag *and* immediately
-/// resets any handlers already installed (chDB's own
-/// `chdb_set_signal_handlers_enabled` calls `chdb_reset_signal_handlers`
-/// internally when disabling), so a host with an existing connection can
-/// still opt out and have it stick — the next query will not re-install them.
+/// May be called at any time, not just before the first connection. Passing
+/// `false` sets a process-wide disable flag *and* immediately resets any
+/// handlers already installed (chDB's own `chdb_set_signal_handlers_enabled`
+/// calls `chdb_reset_signal_handlers` internally when disabling). The flag is
+/// consulted whenever the engine installs handlers — at connect for this
+/// crate's [`Connection`](crate::connection::Connection) API, and at the
+/// start of every query on the one-shot cmdline entry — so a host with an
+/// existing connection can still opt out and have it stick.
 ///
 /// Calling this before the first connection is still the cleanest way to
 /// ensure the handlers are never installed at all, since it removes the brief
@@ -37,19 +37,28 @@ use crate::registry;
 /// ```
 pub fn signal_handlers(enabled: bool) {
     // Wraps chdb_set_signal_handlers_enabled. Sets the process-wide disable
-    // flag consulted on every query's handler setup; disabling also resets
-    // any handlers already installed, as an immediate effect of this call.
+    // flag consulted at handler install; disabling also resets any handlers
+    // already installed, as an immediate effect of this call.
     unsafe { bindings::chdb_set_signal_handlers_enabled(i32::from(enabled)) };
 }
 
 /// Restore every signal handler chDB installed to `SIG_DFL`.
 ///
-/// This is temporary on its own: it restores the disposition but does not set
-/// the disable flag, so the very next query will re-install the handlers
-/// (they are re-installed at the start of every query, not once at engine
-/// start). For a durable opt-out that survives subsequent queries, use
-/// [`signal_handlers`]`(false)` instead, which sets the flag as well as
-/// resetting.
+/// Does not set the disable flag. Handlers are installed once at connect, not
+/// at the start of every [`Connection::query`](crate::connection::Connection::query),
+/// so a later query on that connection leaves the disposition at `SIG_DFL`. A
+/// later connect may install them again. For an opt-out that also covers a
+/// later connect, use [`signal_handlers`]`(false)`, which sets the flag
+/// consulted at install as well as resetting.
+///
+/// # Examples
+///
+/// ```no_run
+/// let conn = chdb_rust::connection::Connection::open_in_memory()?;
+/// let _ = conn.query("SELECT 1", chdb_rust::format::OutputFormat::TabSeparated)?;
+/// chdb_rust::runtime::reset_signal_handlers();
+/// # Ok::<(), chdb_rust::error::Error>(())
+/// ```
 pub fn reset_signal_handlers() {
     // Wraps chdb_reset_signal_handlers. Safe at any time; resets disposition
     // only, does not touch the disable flag.

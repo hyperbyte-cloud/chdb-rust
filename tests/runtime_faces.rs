@@ -140,6 +140,11 @@ fn cases() -> Vec<Case> {
             run: disabling_after_connect_takes_effect,
         },
         Case {
+            name: "reset_signal_handlers_restores_default",
+            expect: "ok\n",
+            run: reset_signal_handlers_restores_default,
+        },
+        Case {
             name: "shutdown_refuses_while_a_connection_is_open",
             expect: "refused|ok\n",
             run: shutdown_refuses_while_a_connection_is_open,
@@ -524,6 +529,37 @@ fn disabling_after_connect_takes_effect() {
         signal_disposition(libc::SIGSEGV),
         libc::SIG_DFL,
         "disabling should stay in effect across the next query"
+    );
+
+    println!("ok");
+}
+
+/// `reset_signal_handlers` restores SIG_DFL and does not set the disable flag.
+/// This crate's `Connection` queries go through `chdb_query_n`, which does not
+/// call `setupCommonDeadlySignalHandlers` — that happens once at connect — so
+/// a later query on the same connection must not put the handlers back.
+fn reset_signal_handlers_restores_default() {
+    let conn = Connection::open_in_memory().expect("open");
+    let _ = scalar_row_on(&conn, "SELECT 1");
+    assert_ne!(
+        signal_disposition(libc::SIGSEGV),
+        libc::SIG_DFL,
+        "connect should install chDB's deadly-signal handlers"
+    );
+
+    chdb_rust::runtime::reset_signal_handlers();
+    assert_eq!(
+        signal_disposition(libc::SIGSEGV),
+        libc::SIG_DFL,
+        "reset should restore SIG_DFL"
+    );
+
+    let result = scalar_row_on(&conn, "SELECT 2");
+    assert_eq!(result, "2");
+    assert_eq!(
+        signal_disposition(libc::SIGSEGV),
+        libc::SIG_DFL,
+        "a subsequent query on this connection must not reinstall handlers"
     );
 
     println!("ok");

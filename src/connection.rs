@@ -427,6 +427,10 @@ impl Connection {
     /// [`query_stream_arrow`](Self::query_stream_arrow) when the result is too
     /// large to hold at once.
     ///
+    /// The returned reader owns the Arrow stream. The C ABI transfers
+    /// `out_stream->release` to the caller, so the reader can be drained after
+    /// this connection is dropped.
+    ///
     /// Available when the crate is built with the `arrow` feature.
     ///
     /// # Examples
@@ -442,29 +446,26 @@ impl Connection {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[cfg(feature = "arrow")]
-    pub fn query_arrow<'a>(
-        &'a self,
-        sql: &str,
-    ) -> Result<crate::arrow_query_stream::ArrowReader<'a>> {
+    pub fn query_arrow(&self, sql: &str) -> Result<crate::arrow_query_stream::ArrowReader> {
         self.query_arrow_inner(sql, None)
     }
 
     /// [`query_arrow`](Self::query_arrow) with explicit type-mapping options.
     #[cfg(feature = "arrow")]
-    pub fn query_arrow_with_opts<'a>(
-        &'a self,
+    pub fn query_arrow_with_opts(
+        &self,
         sql: &str,
         opts: &ArrowOptions,
-    ) -> Result<crate::arrow_query_stream::ArrowReader<'a>> {
+    ) -> Result<crate::arrow_query_stream::ArrowReader> {
         self.query_arrow_inner(sql, Some(opts))
     }
 
     #[cfg(feature = "arrow")]
-    fn query_arrow_inner<'a>(
-        &'a self,
+    fn query_arrow_inner(
+        &self,
         sql: &str,
         opts: Option<&ArrowOptions>,
-    ) -> Result<crate::arrow_query_stream::ArrowReader<'a>> {
+    ) -> Result<crate::arrow_query_stream::ArrowReader> {
         use arrow::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
 
         let conn = unsafe { *self.inner };

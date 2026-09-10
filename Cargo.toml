@@ -78,6 +78,9 @@ name = "14_insert_stream"
 name = "15_arrow_query"
 required-features = ["arrow"]
 
+[[example]]
+name = "16_runtime"
+
 [[test]]
 name = "arrow_insert"
 required-features = ["arrow"]
