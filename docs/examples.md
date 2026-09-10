@@ -523,7 +523,7 @@ for the protocol itself, which is the source of truth rather than this crate.
 
 ## Parameter Binding
 
-Bind values server-side with `{name:Type}` placeholders instead of interpolating them into the SQL text:
+Bind values server-side with `{name:Type}` placeholders instead of interpolating them into the SQL text. This works across buffered, streaming, Arrow-streaming and insert statements:
 
 ```rust
 use chdb_rust::connection::Connection;

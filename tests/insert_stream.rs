@@ -1,7 +1,10 @@
 //! Write-side streaming INSERT: open, push chunks, finalise.
 
+mod common;
+
 use chdb_rust::connection::Connection;
 use chdb_rust::format::{InputFormat, OutputFormat};
+use chdb_rust::session::SessionBuilder;
 
 fn conn_with_table() -> Connection {
     let conn = Connection::open_in_memory().expect("open");
@@ -172,4 +175,36 @@ fn an_insert_statement_can_bind_parameters() {
 
     assert_eq!(stats.rows_written, 1);
     assert_eq!(count(&conn), 1);
+}
+
+#[test]
+fn a_session_can_open_an_insert_stream() {
+    let tmp = common::tempdir();
+    let mut session = SessionBuilder::new()
+        .with_data_path(tmp.path())
+        .with_auto_cleanup(true)
+        .build()
+        .expect("build session");
+
+    session
+        .execute(
+            "CREATE TABLE t (a UInt64, b String) ENGINE = MergeTree ORDER BY a",
+            None,
+        )
+        .expect("create table");
+
+    let mut ins = session
+        .connection_mut()
+        .insert_stream("INSERT INTO t (a, b)", InputFormat::CSV)
+        .expect("open stream");
+    ins.append(b"1,\"one\"\n").expect("append");
+    ins.append(b"2,\"two\"\n").expect("append");
+    let stats = ins.finish().expect("finish");
+
+    assert_eq!(stats.rows_written, 2);
+
+    let result = session
+        .execute("SELECT count() FROM t", None)
+        .expect("count");
+    assert_eq!(result.data_utf8_lossy().trim(), "2");
 }

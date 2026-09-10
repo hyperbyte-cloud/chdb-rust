@@ -26,7 +26,7 @@
 //! - **Stateful sessions**: Create databases and tables with persistent storage
 //! - **Multiple output formats**: JSON, CSV, TabSeparated, and more
 //! - **Query result streaming**: Read large result sets in chunks with constant memory
-//! - **Parameter binding** ([`connection::Connection::query_with_params`]): `{name:Type}` placeholders bound server-side across buffered, streaming and Arrow-streaming queries; values are never interpolated into SQL
+//! - **Parameter binding** ([`connection::Connection::query_with_params`]): `{name:Type}` placeholders bound server-side across buffered, streaming, Arrow-streaming and insert statements; values are never interpolated into SQL
 //! - **Streaming INSERT** ([`insert_stream`]): push rows in chunks in any input format, with engine backpressure; the stream also implements [`std::io::Write`]
 //! - **Arrow bulk insert** (feature `arrow`, on by default): [`insert_record_batch`](arrow_insert::insert_record_batch) via `ArrowStream('name')`. Use [`chdb_rust::arrow`](arrow) types so your Arrow version matches the crate.
 //! - **Arrow batch streaming** (with the `arrow` feature): Stream query results as `RecordBatch` values via the Arrow C Data Interface
@@ -67,7 +67,7 @@ pub use arrow_insert::{
 #[cfg(feature = "arrow")]
 pub use arrow_options::{ArrowOptions, InsertOptions};
 #[cfg(feature = "arrow")]
-pub use arrow_query_stream::ArrowReader;
+pub use arrow_query_stream::{ArrowQueryStream, ArrowReader};
 #[cfg(feature = "arrow")]
 pub use arrow_stream::arrow_stream_table_sql;
 #[allow(
@@ -95,6 +95,7 @@ pub mod durable;
 pub mod error;
 pub mod format;
 pub mod insert_stream;
+pub use insert_stream::{InsertStream, WriteStats};
 pub mod log_level;
 pub(crate) mod params;
 pub mod query_result;
@@ -108,8 +109,6 @@ pub mod version;
 mod test_utils;
 
 use crate::arg::{extract_output_format, Arg};
-#[cfg(feature = "arrow")]
-use crate::arrow_query_stream::ArrowQueryStream;
 use crate::connection::Connection;
 use crate::error::Result;
 use crate::format::OutputFormat;

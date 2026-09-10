@@ -126,19 +126,6 @@ impl<'a> ArrowQueryStream<'a> {
         })
     }
 
-    pub(crate) fn start_borrowed_with_opts(
-        conn: &'a mut Connection,
-        sql: &str,
-        opts: &ArrowOptions,
-    ) -> Result<Self> {
-        let inner = Self::start_query(conn.handle(), sql, Some(opts))?;
-        Ok(Self {
-            conn: ArrowQueryStreamConnection::Borrowed(conn),
-            inner,
-            finished: false,
-        })
-    }
-
     fn start_query(
         conn: bindings::chdb_connection,
         sql: &str,
@@ -152,8 +139,8 @@ impl<'a> ArrowQueryStream<'a> {
         // chdb_result handle (or null on failure) that the caller must both
         // cancel with chdb_stream_cancel_query and free with
         // chdb_destroy_query_result once done — ArrowQueryStream::cancel
-        // (called from Drop) does both. The probe below only inspects the
-        // handle for a start-up error; it does not take ownership of it.
+        // (called from Drop) does both. `check_start`, below, probes the
+        // handle for a start-up error without taking ownership of it.
         let c_opts = opts.map(|o| o.to_c());
         let opts_ptr = c_opts.as_ref().map_or(std::ptr::null(), |o| {
             o as *const bindings::chdb_arrow_options

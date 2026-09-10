@@ -421,6 +421,22 @@ impl Session {
             .expect("a session holds its connection until it is dropped")
     }
 
+    /// Access the session's [`Connection`] mutably, for the streaming query and
+    /// insert APIs that take `&mut self` (`query_stream_with_params`,
+    /// `query_stream_arrow_with_params`, `query_stream_arrow_with_opts`,
+    /// `insert_stream`, `insert_stream_with_params`).
+    ///
+    /// Those methods need exclusive access to the connection because chDB
+    /// accepts no other statement on a connection while a stream is open.
+    /// [`Session`] is the crate's only handle for persistent storage, so this
+    /// is how a session-backed caller reaches streaming INSERT and the
+    /// parameterised/Arrow-streaming query paths.
+    pub fn connection_mut(&mut self) -> &mut Connection {
+        self.conn
+            .as_mut()
+            .expect("a session holds its connection until it is dropped")
+    }
+
     /// The data path this session is on, as it was given.
     pub fn path(&self) -> &Path {
         &self.data_path

@@ -56,8 +56,17 @@ pub fn reset_signal_handlers() {
     unsafe { bindings::chdb_reset_signal_handlers() };
 }
 
-/// Set once a shutdown has actually succeeded. Only then is the library closed
-/// for the process — a refused shutdown must leave it usable.
+/// Set once a shutdown has actually succeeded.
+///
+/// A refusal because connections are still open leaves the engine usable, and
+/// this flag correctly stays false for that case — that logic is not changed
+/// here. But per `chdb.h`'s own wording on `chdb_shutdown`, once it starts,
+/// "the library is closed for business for the rest of the process, whether
+/// or not it manages to stop every thread". So a refusal because some thread
+/// could not be stopped still closes the engine, yet leaves this flag unset:
+/// [`ensure_running`] then can't see it, and a later `open()` surfaces the
+/// engine's own `ConnectionFailed` instead of the more informative
+/// [`Error::EngineShutDown`] that flag exists to produce.
 static SHUT_DOWN: AtomicBool = AtomicBool::new(false);
 
 /// Stop the engine, joining every thread chDB started.
@@ -73,7 +82,13 @@ static SHUT_DOWN: AtomicBool = AtomicBool::new(false);
 /// # Errors
 ///
 /// Returns [`Error::ConnectionsStillOpen`] if any connection is open, and
-/// [`Error::Unknown`] if the engine could not stop every thread.
+/// [`Error::Unknown`] if the engine could not stop every thread. In the
+/// latter case `chdb.h` documents the engine as closed for the process
+/// regardless — "whether or not it manages to stop every thread" — so this
+/// error means the engine is already shut down even though it is reported as
+/// a failure; the crate's internal shut-down flag is not set for it (see
+/// `SHUT_DOWN`), so a subsequent `open()` will surface `ConnectionFailed`
+/// rather than [`Error::EngineShutDown`].
 ///
 /// # Examples
 ///
@@ -88,6 +103,14 @@ pub fn shutdown() -> Result<()> {
         return Ok(());
     }
 
+    // This count is a snapshot: a connect or drop can race it before
+    // chdb_shutdown below runs. That window only sharpens the error message,
+    // it cannot corrupt state — chdb.h (1078-1080) guarantees chdb_shutdown is
+    // safe to call concurrently with chdb_connect because callers are
+    // serialized, so a racing connect either gets in first and is counted, or
+    // arrives later and is refused. Worst case here is a less specific error
+    // (falling through to chdb_shutdown's own refusal) rather than this
+    // check's friendlier `ConnectionsStillOpen`.
     let count = registry::refs();
     if count != 0 {
         return Err(Error::ConnectionsStillOpen { count });

@@ -8,7 +8,11 @@ fn an_arrow_stream_binds_parameters() {
     let mut conn = Connection::open_in_memory().expect("open");
 
     let mut stream = conn
-        .query_stream_arrow_with_params("SELECT number FROM numbers({n:UInt64})", &[("n", "3")])
+        .query_stream_arrow_with_params(
+            "SELECT number FROM numbers({n:UInt64})",
+            &[("n", "3")],
+            None,
+        )
         .expect("stream");
 
     let mut rows = 0usize;
@@ -155,4 +159,55 @@ fn options_reach_the_streaming_path_too() {
         batch.schema().field(0).data_type(),
         DataType::Dictionary(..)
     ));
+}
+
+#[test]
+fn params_and_options_combine_on_the_arrow_stream() {
+    let mut conn = Connection::open_in_memory().expect("open");
+    let opts = ArrowOptions {
+        low_cardinality_as_dictionary: true,
+        ..ArrowOptions::default()
+    };
+
+    let mut stream = conn
+        .query_stream_arrow_with_params(
+            "SELECT CAST(toString(number), 'LowCardinality(String)') AS c \
+             FROM numbers({n:UInt64})",
+            &[("n", "7")],
+            Some(&opts),
+        )
+        .expect("stream");
+
+    let mut rows = 0usize;
+    let mut saw_dictionary = false;
+    while let Some(batch) = stream.next_batch().expect("batch") {
+        if matches!(
+            batch.schema().field(0).data_type(),
+            DataType::Dictionary(..)
+        ) {
+            saw_dictionary = true;
+        }
+        rows += batch.num_rows();
+    }
+
+    assert!(saw_dictionary, "expected a Dictionary-typed field");
+    assert_eq!(
+        rows, 7,
+        "the {{n:UInt64}} parameter must control the row count"
+    );
+}
+
+#[test]
+fn a_one_shot_query_with_no_rows_yields_no_batches() {
+    let conn = Connection::open_in_memory().expect("open");
+
+    let reader = conn
+        .query_arrow("SELECT number FROM numbers(0)")
+        .expect("query_arrow");
+
+    assert_eq!(reader.schema().field(0).name(), "number");
+    assert_eq!(reader.schema().field(0).data_type(), &DataType::UInt64);
+
+    let rows: usize = reader.map(|b| b.expect("batch").num_rows()).sum();
+    assert_eq!(rows, 0);
 }

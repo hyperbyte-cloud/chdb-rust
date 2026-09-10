@@ -118,3 +118,25 @@ fn a_format_stream_binds_parameters() {
 
     assert_eq!(rows, 5);
 }
+
+#[test]
+fn a_parameter_value_may_contain_an_interior_nul() {
+    let conn = Connection::open_in_memory().expect("open");
+
+    // "a\0b" is 3 bytes; if the value were truncated at the NUL (e.g. if it
+    // were passed through as a C string) length() would come back 1.
+    let value = "a\0b";
+    let result = conn
+        .query_with_params(
+            "SELECT length({s:String}) AS v",
+            OutputFormat::TabSeparated,
+            &[("s", value)],
+        )
+        .expect("query");
+
+    assert_eq!(
+        result.data_utf8_lossy().trim(),
+        value.len().to_string(),
+        "expected the engine to see the full byte length, interior NUL included"
+    );
+}

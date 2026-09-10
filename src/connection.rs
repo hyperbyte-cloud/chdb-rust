@@ -405,7 +405,7 @@ impl Connection {
     }
 
     /// Stream a query's result as Arrow record batches, with server-side named
-    /// parameter binding.
+    /// parameter binding and, optionally, explicit type-mapping options.
     ///
     /// Available when the crate is built with the `arrow` feature.
     #[cfg(feature = "arrow")]
@@ -413,9 +413,10 @@ impl Connection {
         &'a mut self,
         sql: &str,
         params: &[(&str, &str)],
+        opts: Option<&ArrowOptions>,
     ) -> Result<crate::arrow_query_stream::ArrowQueryStream<'a>> {
         crate::arrow_query_stream::ArrowQueryStream::start_borrowed_with_params(
-            self, sql, params, None,
+            self, sql, params, opts,
         )
     }
 
@@ -506,7 +507,7 @@ impl Connection {
         sql: &str,
         opts: &ArrowOptions,
     ) -> Result<crate::arrow_query_stream::ArrowQueryStream<'a>> {
-        crate::arrow_query_stream::ArrowQueryStream::start_borrowed_with_opts(self, sql, opts)
+        crate::arrow_query_stream::ArrowQueryStream::start_borrowed(self, sql, Some(opts))
     }
 
     /// Open a streaming INSERT.
