@@ -63,6 +63,8 @@ pub use arrow_insert::{
 #[cfg(feature = "arrow")]
 pub use arrow_options::{ArrowOptions, InsertOptions};
 #[cfg(feature = "arrow")]
+pub use arrow_query_stream::ArrowReader;
+#[cfg(feature = "arrow")]
 pub use arrow_stream::arrow_stream_table_sql;
 #[allow(
     dead_code,

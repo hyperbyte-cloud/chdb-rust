@@ -25,6 +25,45 @@ enum ArrowQueryStreamConnection<'a> {
     Owned(Connection),
 }
 
+/// A one-shot Arrow reader over a query's entire result, borrowed from the
+/// [`Connection`] that produced it.
+///
+/// Returned by [`Connection::query_arrow`](crate::connection::Connection::query_arrow)
+/// and [`Connection::query_arrow_with_opts`](crate::connection::Connection::query_arrow_with_opts).
+///
+/// The engine buffers behind the underlying Arrow C Data Interface stream
+/// belong to the connection that produced them, so this reader must be
+/// drained or dropped before the connection is — the `'a` borrow enforces
+/// that at compile time, the same way [`ArrowQueryStream`]'s borrowed variant
+/// does for the streaming path.
+pub struct ArrowReader<'a> {
+    inner: ArrowArrayStreamReader,
+    _conn: std::marker::PhantomData<&'a Connection>,
+}
+
+impl<'a> ArrowReader<'a> {
+    pub(crate) fn new(inner: ArrowArrayStreamReader) -> Self {
+        Self {
+            inner,
+            _conn: std::marker::PhantomData,
+        }
+    }
+}
+
+impl Iterator for ArrowReader<'_> {
+    type Item = arrow::error::Result<RecordBatch>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+}
+
+impl arrow::array::RecordBatchReader for ArrowReader<'_> {
+    fn schema(&self) -> arrow::datatypes::SchemaRef {
+        self.inner.schema()
+    }
+}
+
 /// A streaming Arrow query result that yields record batches.
 ///
 /// Returned by [`Connection::query_stream_arrow`](crate::connection::Connection::query_stream_arrow),

@@ -1,4 +1,6 @@
-//! Shared options for Arrow bulk insert paths.
+//! Options for chDB's Arrow paths: the insert-side [`InsertOptions`] (tuning
+//! knobs for `INSERT … SELECT` and direct FFI insert) and the read-side
+//! [`ArrowOptions`] (type-mapping knobs for Arrow export).
 
 /// Tuning knobs appended as `SETTINGS` on the insert `INSERT … SELECT` query,
 /// or passed to direct FFI insert APIs.
@@ -51,7 +53,9 @@ impl InsertOptions {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ArrowOptions {
     /// Emit types with no faithful Arrow mapping — JSON/Object, Dynamic,
-    /// AggregateFunction — as `Binary` rather than failing. Default `true`.
+    /// AggregateFunction — as `Binary` instead of failing. Default `false`,
+    /// meaning the engine throws `UNKNOWN_TYPE` for such columns; `true`
+    /// degrades them to `Binary`.
     pub unsupported_as_binary: bool,
     /// Emit `LowCardinality(T)` as an Arrow dictionary array instead of
     /// materializing it to `T`. Default `false`.
@@ -66,7 +70,7 @@ pub struct ArrowOptions {
 impl Default for ArrowOptions {
     fn default() -> Self {
         Self {
-            unsupported_as_binary: true,
+            unsupported_as_binary: false,
             low_cardinality_as_dictionary: false,
             string_as_string: true,
         }

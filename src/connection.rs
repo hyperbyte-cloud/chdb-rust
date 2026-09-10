@@ -431,7 +431,6 @@ impl Connection {
     /// # Examples
     ///
     /// ```no_run
-    /// use arrow::array::RecordBatchReader;
     /// use chdb_rust::connection::Connection;
     ///
     /// let conn = Connection::open_in_memory()?;
@@ -442,26 +441,29 @@ impl Connection {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[cfg(feature = "arrow")]
-    pub fn query_arrow(&self, sql: &str) -> Result<arrow::ffi_stream::ArrowArrayStreamReader> {
+    pub fn query_arrow<'a>(
+        &'a self,
+        sql: &str,
+    ) -> Result<crate::arrow_query_stream::ArrowReader<'a>> {
         self.query_arrow_inner(sql, None)
     }
 
     /// [`query_arrow`](Self::query_arrow) with explicit type-mapping options.
     #[cfg(feature = "arrow")]
-    pub fn query_arrow_with_opts(
-        &self,
+    pub fn query_arrow_with_opts<'a>(
+        &'a self,
         sql: &str,
         opts: &ArrowOptions,
-    ) -> Result<arrow::ffi_stream::ArrowArrayStreamReader> {
+    ) -> Result<crate::arrow_query_stream::ArrowReader<'a>> {
         self.query_arrow_inner(sql, Some(opts))
     }
 
     #[cfg(feature = "arrow")]
-    fn query_arrow_inner(
-        &self,
+    fn query_arrow_inner<'a>(
+        &'a self,
         sql: &str,
         opts: Option<&ArrowOptions>,
-    ) -> Result<arrow::ffi_stream::ArrowArrayStreamReader> {
+    ) -> Result<crate::arrow_query_stream::ArrowReader<'a>> {
         use arrow::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
 
         let conn = unsafe { *self.inner };
@@ -491,7 +493,9 @@ impl Connection {
         // Freed when it drops; the data lives in `ffi_stream`, not in it.
         QueryResult::new(result_ptr).check_error()?;
 
-        ArrowArrayStreamReader::try_new(ffi_stream).map_err(|e| Error::InvalidData(e.to_string()))
+        let reader = ArrowArrayStreamReader::try_new(ffi_stream)
+            .map_err(|e| Error::InvalidData(e.to_string()))?;
+        Ok(crate::arrow_query_stream::ArrowReader::new(reader))
     }
 
     /// Stream a query's result as Arrow record batches with explicit

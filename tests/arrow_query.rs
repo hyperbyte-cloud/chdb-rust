@@ -52,7 +52,50 @@ fn a_one_shot_query_matches_the_streamed_result() {
         streamed += batch.num_rows();
     }
 
+    assert_eq!(one_shot, 500);
     assert_eq!(one_shot, streamed);
+}
+
+#[test]
+fn the_default_options_match_passing_none() {
+    // AggregateFunction has no faithful Arrow mapping, so it exercises
+    // `unsupported_as_binary`, per chdb.h's own list of unsupported types
+    // (JSON/Object, Dynamic, AggregateFunction).
+    let sql = "SELECT sumState(number) AS s FROM numbers(3)";
+
+    let conn = Connection::open_in_memory().expect("open");
+    let none_result = conn
+        .query_arrow(sql)
+        .map(|r| r.schema().field(0).data_type().clone());
+
+    let conn2 = Connection::open_in_memory().expect("open2");
+    let default_result = conn2
+        .query_arrow_with_opts(sql, &ArrowOptions::default())
+        .map(|r| r.schema().field(0).data_type().clone());
+
+    match (&none_result, &default_result) {
+        (Err(_), Err(_)) => {}
+        (Ok(a), Ok(b)) => assert_eq!(
+            a, b,
+            "query_arrow and query_arrow_with_opts(default) diverged"
+        ),
+        _ => panic!(
+            "query_arrow and query_arrow_with_opts(default) diverged: {:?} vs {:?}",
+            none_result.is_ok(),
+            default_result.is_ok()
+        ),
+    }
+    // Observed: both error, since the engine's own default
+    // (unsupported_as_binary = 0) throws UNKNOWN_TYPE for AggregateFunction.
+    assert!(none_result.is_err(), "got {:?}", none_result);
+
+    let conn3 = Connection::open_in_memory().expect("open3");
+    let opts = ArrowOptions {
+        unsupported_as_binary: true,
+        ..ArrowOptions::default()
+    };
+    let binary = conn3.query_arrow_with_opts(sql, &opts).expect("binary");
+    assert_eq!(binary.schema().field(0).data_type(), &DataType::Binary);
 }
 
 #[test]
