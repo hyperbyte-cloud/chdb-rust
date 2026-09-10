@@ -115,3 +115,61 @@ fn opening_a_bad_statement_fails_at_open() {
         "expected QueryError, got {err:?}"
     );
 }
+
+#[test]
+fn cancelling_commits_nothing() {
+    let mut conn = conn_with_table();
+
+    let mut ins = conn
+        .insert_stream("INSERT INTO t (a, b)", InputFormat::CSV)
+        .expect("open stream");
+    ins.append(b"1,\"one\"\n").expect("append");
+    ins.cancel();
+
+    assert_eq!(count(&conn), 0);
+
+    // The connection must still be usable after a cancel.
+    conn.query("SELECT 1", OutputFormat::TabSeparated)
+        .expect("connection still usable after cancel");
+}
+
+#[test]
+fn a_stream_is_an_io_write_sink() {
+    use std::io::Write as _;
+
+    let mut conn = conn_with_table();
+
+    let mut ins = conn
+        .insert_stream("INSERT INTO t (a, b)", InputFormat::JSONEachRow)
+        .expect("open stream");
+
+    for i in 1..=3u64 {
+        writeln!(ins, r#"{{"a":{i},"b":"row-{i}"}}"#).expect("write");
+    }
+    ins.flush().expect("flush");
+
+    let stats = ins.finish().expect("finish");
+    assert_eq!(stats.rows_written, 3);
+    assert_eq!(count(&conn), 3);
+}
+
+#[test]
+fn an_insert_statement_can_bind_parameters() {
+    let mut conn = conn_with_table();
+
+    // A parameterised INSERT INTO FUNCTION is the motivating case; a plain
+    // table insert with a bound literal exercises the same binding path.
+    let mut ins = conn
+        .insert_stream_with_params(
+            "INSERT INTO t (a, b) SETTINGS min_insert_block_size_rows = {n:UInt64}",
+            InputFormat::CSV,
+            &[("n", "1024")],
+        )
+        .expect("open stream");
+
+    ins.append(b"1,\"one\"\n").expect("append");
+    let stats = ins.finish().expect("finish");
+
+    assert_eq!(stats.rows_written, 1);
+    assert_eq!(count(&conn), 1);
+}

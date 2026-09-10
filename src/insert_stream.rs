@@ -91,6 +91,42 @@ impl<'a> InsertStream<'a> {
         Ok(stream)
     }
 
+    pub(crate) fn start_with_params(
+        conn: &'a mut Connection,
+        sql: &str,
+        format: InputFormat,
+        params: &[(&str, &str)],
+    ) -> Result<Self> {
+        let handle = {
+            let format = format.as_str();
+            let p = crate::params::ParamArrays::new(params);
+            // Wraps chdb_stream_insert_with_params_n. Bindings are captured
+            // during initialisation and cleared when it returns.
+            unsafe {
+                bindings::chdb_stream_insert_with_params_n(
+                    conn.handle(),
+                    sql.as_ptr() as *const c_char,
+                    sql.len(),
+                    format.as_ptr() as *const c_char,
+                    format.len(),
+                    p.names(),
+                    p.name_lens(),
+                    p.values(),
+                    p.value_lens(),
+                    p.count(),
+                )
+            }
+        };
+
+        let stream = Self {
+            handle,
+            _conn: conn,
+            done: false,
+        };
+        stream.check_error()?;
+        Ok(stream)
+    }
+
     /// The stream's pending error, if it has one.
     fn check_error(&self) -> Result<()> {
         // Wraps chdb_stream_insert_error. The returned string is owned by the
@@ -174,10 +210,31 @@ impl<'a> InsertStream<'a> {
 impl Drop for InsertStream<'_> {
     fn drop(&mut self) {
         if !self.done {
-            // An unfinished stream is abandoned, not committed.
+            // Wraps chdb_stream_cancel_insert. An unfinished stream is
+            // abandoned, not committed.
             unsafe { bindings::chdb_stream_cancel_insert(self.handle) };
         }
-        // Required on every path, finished or not.
+        // Wraps chdb_destroy_insert_stream. Required on every path, finished
+        // or not.
         unsafe { bindings::chdb_destroy_insert_stream(self.handle) };
+    }
+}
+
+/// Lets anything that writes bytes — `serde_json::to_writer`, `csv::Writer`,
+/// `write!` — feed the stream directly.
+///
+/// Errors from [`append`](InsertStream::append) are surfaced as
+/// [`std::io::ErrorKind::Other`] carrying the engine's message, because that is
+/// the only shape `io::Write` has for them.
+impl std::io::Write for InsertStream<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.append(buf)
+            .map(|()| buf.len())
+            .map_err(|e| std::io::Error::other(e.to_string()))
+    }
+
+    /// A no-op: the engine buffers, and there is nothing held on this side.
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }

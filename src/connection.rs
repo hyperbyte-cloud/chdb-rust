@@ -451,6 +451,21 @@ impl Connection {
         crate::insert_stream::InsertStream::start(self, sql, format)
     }
 
+    /// Open a streaming INSERT whose statement carries `{name:Type}`
+    /// placeholders.
+    ///
+    /// The motivating case is `INSERT INTO FUNCTION file({path:String}, ...)`,
+    /// where the destination itself is a bound value. See
+    /// [`query_with_params`](Self::query_with_params) for binding rules.
+    pub fn insert_stream_with_params<'a>(
+        &'a mut self,
+        sql: &str,
+        format: InputFormat,
+        params: &[(&str, &str)],
+    ) -> Result<crate::insert_stream::InsertStream<'a>> {
+        crate::insert_stream::InsertStream::start_with_params(self, sql, format, params)
+    }
+
     #[cfg(feature = "arrow")]
     /// Register an Arrow C Data Interface stream for use with `ArrowStream('name')`.
     ///
