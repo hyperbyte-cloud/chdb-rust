@@ -13,6 +13,9 @@ This document provides simple and easy-to-follow examples for using chdb-rust, a
 7. [Error Handling](#error-handling)
 8. [Fast Bulk Inserts (Arrow)](#fast-bulk-inserts-arrow)
 9. [Durable Objects](#durable-objects)
+10. [Parameter Binding](#parameter-binding)
+11. [Streaming INSERT](#streaming-insert)
+12. [One-Shot Arrow Export](#one-shot-arrow-export)
 
 ## Basic Setup
 
@@ -517,6 +520,85 @@ handing it to `Namespace::with_backend`.
 See `examples/09_durable_object.rs` for a runnable program, and
 [CHDB_DURABLE_V1_CONTRACT.md](https://github.com/chdb-io/chdb/blob/main/dev-docs/CHDB_DURABLE_V1_CONTRACT.md)
 for the protocol itself, which is the source of truth rather than this crate.
+
+## Parameter Binding
+
+Bind values server-side with `{name:Type}` placeholders instead of interpolating them into the SQL text:
+
+```rust
+use chdb_rust::connection::Connection;
+use chdb_rust::format::OutputFormat;
+
+let conn = Connection::open_in_memory()?;
+
+let result = conn.query_with_params(
+    "SELECT {greeting:String} AS g, {n:Int64} * 2 AS doubled",
+    OutputFormat::JSONEachRow,
+    &[("greeting", "hello"), ("n", "21")],
+)?;
+println!("{}", result.data_utf8_lossy());
+```
+
+On a duplicate name the last value wins. Bindings are scoped to the single call, and a value like `'; DROP TABLE users; --` stays a string, never SQL.
+
+See `examples/13_query_params.rs` for a runnable program.
+
+## Streaming INSERT
+
+`Connection::insert_stream` opens a write-side counterpart to query streaming: send the `INSERT` statement without data, then push rows in chunks via `std::io::Write`. The connection applies backpressure, so a producer faster than the engine is throttled rather than buffered without bound.
+
+```rust
+use std::io::Write as _;
+use chdb_rust::connection::Connection;
+use chdb_rust::format::{InputFormat, OutputFormat};
+
+let mut conn = Connection::open_in_memory()?;
+conn.query(
+    "CREATE TABLE events (id UInt64, name String) ENGINE = MergeTree ORDER BY id",
+    OutputFormat::TabSeparated,
+)?;
+
+let mut ins = conn.insert_stream("INSERT INTO events (id, name)", InputFormat::JSONEachRow)?;
+writeln!(ins, r#"{{"id":1,"name":"event-1"}}"#)?;
+let stats = ins.finish()?;
+println!("wrote {} rows", stats.rows_written);
+```
+
+The INSERT statement must carry no `FORMAT` clause and no inline data — the format is the `format` argument.
+
+See `examples/14_insert_stream.rs` for a runnable program.
+
+## One-Shot Arrow Export
+
+`Connection::query_arrow` takes a whole result as an Arrow stream, zero-copy where the engine can manage it — no IPC serialization and no compression round-trip. It returns an `ArrowReader` that implements both `Iterator` and `arrow::array::RecordBatchReader`:
+
+```rust
+use arrow::array::RecordBatchReader;
+use chdb_rust::connection::Connection;
+
+let conn = Connection::open_in_memory()?;
+let reader = conn.query_arrow("SELECT number FROM numbers(1000)")?;
+println!("schema: {}", reader.schema());
+for batch in reader {
+    println!("rows: {}", batch?.num_rows());
+}
+```
+
+`ArrowOptions` controls the ClickHouse-to-Arrow type mapping — for example, `low_cardinality_as_dictionary` emits `LowCardinality(T)` as an Arrow dictionary array instead of materializing it to `T`:
+
+```rust
+use chdb_rust::arrow_options::ArrowOptions;
+
+let opts = ArrowOptions {
+    low_cardinality_as_dictionary: true,
+    ..ArrowOptions::default()
+};
+let reader = conn.query_arrow_with_opts("SELECT ...", &opts)?;
+```
+
+Prefer `query_stream_arrow` instead when the result is too large to hold at once.
+
+See `examples/15_arrow_query.rs` for a runnable program.
 
 ## Additional Resources
 

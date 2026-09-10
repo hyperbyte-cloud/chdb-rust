@@ -8,6 +8,13 @@
 
 Experimental [chDB](https://github.com/chdb-io/chdb) FFI bindings for Rust.
 
+## Features
+
+- **Parameter binding**: `{name:Type}` placeholders bound server-side — values are never interpolated into SQL
+- **Streaming INSERT**: push rows in chunks in any input format, with engine backpressure
+- **One-shot Arrow export**: take a whole result as an Arrow stream, zero-copy where possible
+- **Runtime control**: decline chDB's process-wide signal handlers, and shut the engine down cleanly
+
 ## Documentation
 
 **[Full API Documentation](https://docs.rs/crate/chdb-rust/latest)** - Complete Rust API reference on docs.rs
