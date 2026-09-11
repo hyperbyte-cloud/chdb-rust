@@ -123,7 +123,7 @@ required-features = ["durable-s3"]
 # the test matrix runs again before anything goes to crates.io. Until then rc.2
 # is what local builds and CI test against, since it is where backup, restore
 # and statement analysis first appeared.
-engine = "v26.7.2-rc.2"
+engine = "v26.7.3"
 
 [package.metadata.docs.rs]
 # docs.rs cannot download libchdb or link native libraries.
