@@ -119,10 +119,11 @@ required-features = ["durable-s3"]
 # update_libchdb.sh, which are what actually fetch the engine.
 #
 # Release gate: this crate does not publish against a release candidate. The pin
-# moves to v26.7.3 — the first stable release carrying the Durable V1 ABI — and
-# the test matrix runs again before anything goes to crates.io. Until then rc.2
-# is what local builds and CI test against, since it is where backup, restore
-# and statement analysis first appeared.
+# is v26.7.3, the first stable release carrying the Durable V1 ABI, so that gate
+# is met and a publish can go ahead once the test matrix has run against it.
+# Backup, restore and statement analysis first appeared one release earlier, in
+# v26.7.2-rc.2, which is still the oldest engine the durable features build
+# against.
 engine = "v26.7.3"
 
 [package.metadata.docs.rs]
