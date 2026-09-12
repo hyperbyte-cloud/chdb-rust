@@ -13,7 +13,7 @@
 //! ```
 
 use std::borrow::Cow;
-use std::ffi::{c_char, CString};
+use std::ffi::c_char;
 
 use crate::error::Result;
 
@@ -244,39 +244,53 @@ impl QueryParam {
     }
 }
 
-/// NUL-terminated name/value C strings ready for `chdb_query_with_params`.
+/// Name/value buffers and parallel length arrays for `chdb_*_with_params_n`.
 ///
-/// Pointers returned by [`Self::names_ptr`] / [`Self::values_ptr`] are valid only
-/// while this struct remains alive. Callers must keep `EncodedParams` live across
-/// the FFI call that consumes those pointers. The chDB C API is assumed to copy
-/// parameter names and values during that call and not retain the pointers.
+/// Pointers returned by [`Self::names_ptr`] / [`Self::values_ptr`] and the
+/// length arrays from [`Self::name_lens_ptr`] / [`Self::value_lens_ptr`] are
+/// valid only while this struct remains alive. Callers must keep `EncodedParams`
+/// live across the FFI call that consumes those pointers. The chDB C API is
+/// assumed to copy parameter names and values during that call and not retain
+/// the pointers.
 pub(crate) struct EncodedParams {
-    _name_cstrs: Vec<CString>,
-    _value_cstrs: Vec<CString>,
+    _name_bufs: Vec<Vec<u8>>,
+    _value_bufs: Vec<Vec<u8>>,
     name_ptrs: Vec<*const c_char>,
     value_ptrs: Vec<*const c_char>,
+    name_lens: Vec<usize>,
+    value_lens: Vec<usize>,
 }
 
 impl EncodedParams {
     pub(crate) fn encode(params: impl Into<QueryParams>) -> Result<Self> {
         let params = params.into();
-        let mut name_cstrs = Vec::new();
-        let mut value_cstrs = Vec::new();
+        let mut name_bufs = Vec::new();
+        let mut value_bufs = Vec::new();
 
         for (name, param) in params {
             let encoded = param.encode()?;
-            name_cstrs.push(CString::new(name)?);
-            value_cstrs.push(CString::new(encoded.as_ref())?);
+            name_bufs.push(name.into_bytes());
+            value_bufs.push(encoded.as_ref().as_bytes().to_vec());
         }
 
-        let name_ptrs = name_cstrs.iter().map(|s| s.as_ptr()).collect();
-        let value_ptrs = value_cstrs.iter().map(|s| s.as_ptr()).collect();
+        let name_lens: Vec<usize> = name_bufs.iter().map(|b| b.len()).collect();
+        let value_lens: Vec<usize> = value_bufs.iter().map(|b| b.len()).collect();
+        let name_ptrs = name_bufs
+            .iter()
+            .map(|b| b.as_ptr() as *const c_char)
+            .collect();
+        let value_ptrs = value_bufs
+            .iter()
+            .map(|b| b.as_ptr() as *const c_char)
+            .collect();
 
         Ok(Self {
-            _name_cstrs: name_cstrs,
-            _value_cstrs: value_cstrs,
+            _name_bufs: name_bufs,
+            _value_bufs: value_bufs,
             name_ptrs,
             value_ptrs,
+            name_lens,
+            value_lens,
         })
     }
 
@@ -293,12 +307,30 @@ impl EncodedParams {
         }
     }
 
-    /// Pointer to the parallel value C-string array, or null when empty.
+    /// Pointer to the parallel value buffer array, or null when empty.
     pub(crate) fn values_ptr(&self) -> *const *const c_char {
         if self.value_ptrs.is_empty() {
             std::ptr::null()
         } else {
             self.value_ptrs.as_ptr()
+        }
+    }
+
+    /// Pointer to the parallel name length array, or null when empty.
+    pub(crate) fn name_lens_ptr(&self) -> *const usize {
+        if self.name_lens.is_empty() {
+            std::ptr::null()
+        } else {
+            self.name_lens.as_ptr()
+        }
+    }
+
+    /// Pointer to the parallel value length array, or null when empty.
+    pub(crate) fn value_lens_ptr(&self) -> *const usize {
+        if self.value_lens.is_empty() {
+            std::ptr::null()
+        } else {
+            self.value_lens.as_ptr()
         }
     }
 }
@@ -419,8 +451,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::CStr;
-
     use super::*;
 
     #[test]
@@ -641,6 +671,8 @@ mod tests {
         assert_eq!(encoded.len(), 0);
         assert!(encoded.names_ptr().is_null());
         assert!(encoded.values_ptr().is_null());
+        assert!(encoded.name_lens_ptr().is_null());
+        assert!(encoded.value_lens_ptr().is_null());
         Ok(())
     }
 
@@ -654,16 +686,31 @@ mod tests {
         assert_eq!(encoded.len(), 2);
         assert!(!encoded.names_ptr().is_null());
         assert!(!encoded.values_ptr().is_null());
+        assert!(!encoded.name_lens_ptr().is_null());
+        assert!(!encoded.value_lens_ptr().is_null());
 
         unsafe {
-            assert_eq!(CStr::from_ptr(*encoded.names_ptr()).to_bytes(), b"x");
+            let names = encoded.names_ptr();
+            let name_lens = encoded.name_lens_ptr();
+            let values = encoded.values_ptr();
+            let value_lens = encoded.value_lens_ptr();
+
+            assert_eq!(*name_lens, 1);
+            assert_eq!(std::slice::from_raw_parts(*names as *const u8, *name_lens), b"x");
+            assert_eq!(*name_lens.add(1), 5);
             assert_eq!(
-                CStr::from_ptr(*encoded.names_ptr().add(1)).to_bytes(),
+                std::slice::from_raw_parts(*names.add(1) as *const u8, *name_lens.add(1)),
                 b"label"
             );
-            assert_eq!(CStr::from_ptr(*encoded.values_ptr()).to_bytes(), b"5");
+
+            assert_eq!(*value_lens, 1);
             assert_eq!(
-                CStr::from_ptr(*encoded.values_ptr().add(1)).to_bytes(),
+                std::slice::from_raw_parts(*values as *const u8, *value_lens),
+                b"5"
+            );
+            assert_eq!(*value_lens.add(1), 2);
+            assert_eq!(
+                std::slice::from_raw_parts(*values.add(1) as *const u8, *value_lens.add(1)),
                 b"ok"
             );
         }

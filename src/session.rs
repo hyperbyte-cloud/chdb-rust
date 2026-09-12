@@ -18,12 +18,13 @@ use crate::arrow_insert::{
     insert_record_batches,
 };
 #[cfg(feature = "arrow")]
-use crate::arrow_options::InsertOptions;
+use crate::arrow_options::{ArrowOptions, InsertOptions};
 #[cfg(feature = "arrow")]
 use crate::arrow_query_stream::ArrowQueryStream;
 use crate::connection::Connection;
 use crate::error::{Error, Result};
-use crate::format::OutputFormat;
+use crate::format::{InputFormat, OutputFormat};
+use crate::insert_stream::InsertStream;
 use crate::query_param::QueryParams;
 use crate::query_result::QueryResult;
 use crate::query_stream::QueryStream;
@@ -467,6 +468,42 @@ impl Session {
             .query_stream_with_params(query, fmt, params)
     }
 
+    /// Open a streaming INSERT on this session's connection.
+    ///
+    /// Session-level counterpart of [`Connection::insert_stream`](crate::connection::Connection::insert_stream).
+    /// The session is exclusively borrowed until the stream is finished, cancelled
+    /// or dropped.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the INSERT statement is invalid when the stream is opened.
+    pub fn insert_stream<'a>(
+        &'a mut self,
+        sql: &str,
+        format: InputFormat,
+    ) -> Result<InsertStream<'a>> {
+        self.conn
+            .as_mut()
+            .expect("a session holds its connection until it is dropped")
+            .insert_stream(sql, format)
+    }
+
+    /// Open a streaming INSERT whose statement carries `{name:Type}` placeholders.
+    ///
+    /// Session-level counterpart of
+    /// [`Connection::insert_stream_with_params`](crate::connection::Connection::insert_stream_with_params).
+    pub fn insert_stream_with_params<'a>(
+        &'a mut self,
+        sql: &str,
+        format: InputFormat,
+        params: impl Into<QueryParams>,
+    ) -> Result<InsertStream<'a>> {
+        self.conn
+            .as_mut()
+            .expect("a session holds its connection until it is dropped")
+            .insert_stream_with_params(sql, format, params)
+    }
+
     /// Execute a query with ClickHouse `{name:Type}` parameter binding.
     ///
     /// Like [`Self::execute`], but SQL placeholders are bound from `params`
@@ -518,16 +555,12 @@ impl Session {
             .expect("a session holds its connection until it is dropped")
     }
 
-    /// Access the session's [`Connection`] mutably, for the streaming query and
-    /// insert APIs that take `&mut self` (`query_stream_with_params`,
-    /// `query_stream_arrow_with_params`, `query_stream_arrow_with_opts`,
-    /// `insert_stream`, `insert_stream_with_params`).
+    /// Access the session's [`Connection`] mutably for APIs that exist only on
+    /// [`Connection`] today (for example [`Connection::query_stream_arrow_with_opts`](crate::connection::Connection::query_stream_arrow_with_opts)).
     ///
-    /// Those methods need exclusive access to the connection because chDB
-    /// accepts no other statement on a connection while a stream is open.
-    /// [`Session`] is the crate's only handle for persistent storage, so this
-    /// is how a session-backed caller reaches streaming INSERT and the
-    /// parameterised/Arrow-streaming query paths.
+    /// Streaming query and INSERT methods on [`Session`] borrow the connection
+    /// exclusively while a stream is open because chDB accepts no other
+    /// statement on that connection meanwhile.
     pub fn connection_mut(&mut self) -> &mut Connection {
         self.conn
             .as_mut()
@@ -646,6 +679,7 @@ impl Session {
     /// let mut stream = session.execute_stream_arrow_with_params(
     ///     "SELECT {x:UInt64} AS v",
     ///     [("x", 11_u64)],
+    ///     None,
     /// )?;
     /// while let Some(batch) = stream.next_batch()? {
     ///     println!("rows: {}", batch.num_rows());
@@ -663,11 +697,12 @@ impl Session {
         &'a mut self,
         query: &str,
         params: impl Into<QueryParams>,
+        opts: Option<&ArrowOptions>,
     ) -> Result<ArrowQueryStream<'a>> {
         self.conn
             .as_mut()
             .expect("a session holds its connection until it is dropped")
-            .query_stream_arrow_with_params(query, params, None)
+            .query_stream_arrow_with_params(query, params, opts)
     }
 }
 

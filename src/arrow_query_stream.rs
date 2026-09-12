@@ -6,7 +6,7 @@
 //!
 //! Available when the crate is built with the `arrow` feature.
 
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::mem::ManuallyDrop;
 use std::os::raw::c_char;
 
@@ -194,7 +194,6 @@ impl<'a> ArrowQueryStream<'a> {
         params: impl Into<QueryParams>,
         opts: Option<&ArrowOptions>,
     ) -> Result<*mut bindings::chdb_result> {
-        let query_cstr = CString::new(sql)?;
         let encoded = EncodedParams::encode(params)?;
         // Materialized into a named local so the pointer handed to C outlives the call.
         let c_opts = opts.map(|o| o.to_c());
@@ -202,40 +201,26 @@ impl<'a> ArrowQueryStream<'a> {
             o as *const bindings::chdb_arrow_options
         });
 
-        // SAFETY:
-        // - `conn` is a live `chdb_connection` from `Connection::handle()` on an open
-        //   connection that outlives this call (borrowed or owned by the stream).
-        // - `query_cstr` is NUL-terminated and outlives this call.
-        // - The third argument is the Arrow type-mapping options pointer, null when
-        //   the caller passed none, which selects the engine's default contract.
-        // - `encoded` owns the name/value `CString`s; `names_ptr`/`values_ptr` alias
-        //   those buffers for the duration of the call. libchdb may read them only
-        //   during this call (parameter bind at stream start) and must not retain them.
-        // - When `encoded.len() == 0`, both pointer args are null, which the C API
-        //   accepts for an empty parameter list.
+        // chdb_stream_query_arrow_with_params_n takes pointer + length for the query
+        // and each bound value. A null options pointer selects the engine default
+        // type mapping. It returns an owned streaming chdb_result handle (or null
+        // on failure) that ArrowQueryStream::cancel (called from Drop) cancels and
+        // frees.
         let stream_ptr = unsafe {
-            bindings::chdb_stream_query_arrow_with_params(
+            bindings::chdb_stream_query_arrow_with_params_n(
                 conn,
-                query_cstr.as_ptr(),
+                sql.as_ptr() as *const c_char,
+                sql.len(),
                 opts_ptr,
                 encoded.names_ptr(),
+                encoded.name_lens_ptr(),
                 encoded.values_ptr(),
+                encoded.value_lens_ptr(),
                 encoded.len(),
             )
         };
 
-        if stream_ptr.is_null() {
-            return Err(Error::NoResult);
-        }
-
-        let probe = ManuallyDrop::new(QueryResult::new(stream_ptr));
-        if let Err(e) = probe.check_error_ref() {
-            drop(ManuallyDrop::into_inner(probe));
-            return Err(e);
-        }
-        std::mem::forget(ManuallyDrop::into_inner(probe));
-
-        Ok(stream_ptr)
+        Self::check_start(stream_ptr)
     }
 
     fn conn_handle(&self) -> bindings::chdb_connection {
@@ -477,6 +462,7 @@ mod tests {
         let mut stream = session.execute_stream_arrow_with_params(
             "SELECT * FROM items WHERE id > {min_id:UInt64}",
             [("min_id", 100_u64)],
+            None,
         )?;
         assert!(stream.next_batch()?.is_none());
         assert!(stream.next_batch()?.is_none());

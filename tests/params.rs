@@ -128,23 +128,18 @@ fn a_format_stream_binds_parameters() {
 }
 
 #[test]
-fn a_parameter_value_containing_an_interior_nul_is_rejected() {
+fn a_parameter_value_containing_an_interior_nul_binds_binary_safe() {
     let conn = Connection::open_in_memory().expect("open");
 
-    // Parameter values are encoded as C strings, so a value carrying an
-    // interior NUL cannot be represented. The important property is that this
-    // is refused outright rather than silently truncated at the NUL — a
-    // truncating encoder would bind "a" where the caller wrote "a\0b".
-    let err = conn
+    // The _n parameter path passes explicit byte lengths, so an interior NUL in
+    // the bound value must round-trip rather than truncate at the first NUL.
+    let result = conn
         .query_with_params(
             "SELECT length({s:String}) AS v",
             OutputFormat::TabSeparated,
             [("s", "a\0b")],
         )
-        .expect_err("an interior NUL must be refused, not truncated");
+        .expect("binary-safe bind");
 
-    assert!(
-        matches!(err, chdb_rust::error::Error::Nul(_)),
-        "expected Error::Nul, got {err:?}"
-    );
+    assert_eq!(result.data_utf8_lossy().trim(), "3");
 }

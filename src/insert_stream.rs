@@ -14,7 +14,7 @@
 //! error paths, and neither finishing nor cancelling frees it. [`Drop`] handles
 //! the paths [`InsertStream::finish`] and [`InsertStream::cancel`] do not.
 
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::time::Duration;
 
@@ -98,24 +98,27 @@ impl<'a> InsertStream<'a> {
         format: InputFormat,
         params: impl Into<QueryParams>,
     ) -> Result<Self> {
-        let query_cstr = CString::new(sql)?;
-        let format_cstr = CString::new(format.as_str())?;
+        let format = format.as_str();
         let encoded = EncodedParams::encode(params)?;
 
         let handle = {
-            // Wraps chdb_stream_insert_with_params. The handle is never null;
+            // Wraps chdb_stream_insert_with_params_n. The handle is never null;
             // an init failure is reported through chdb_stream_insert_error.
             // Bindings are captured during initialisation and cleared when it
             // returns, so `encoded` need only outlive this call. When
             // `encoded.len() == 0` both pointer args are null, which the C API
             // accepts for an empty parameter list.
             unsafe {
-                bindings::chdb_stream_insert_with_params(
+                bindings::chdb_stream_insert_with_params_n(
                     conn.handle(),
-                    query_cstr.as_ptr(),
-                    format_cstr.as_ptr(),
+                    sql.as_ptr() as *const c_char,
+                    sql.len(),
+                    format.as_ptr() as *const c_char,
+                    format.len(),
                     encoded.names_ptr(),
+                    encoded.name_lens_ptr(),
                     encoded.values_ptr(),
+                    encoded.value_lens_ptr(),
                     encoded.len(),
                 )
             }

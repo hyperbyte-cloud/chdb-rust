@@ -3,7 +3,6 @@
 //! This module provides the [`QueryStream`] type for reading large query results
 //! in chunks without materializing the entire output in memory.
 
-use std::ffi::CString;
 use std::mem::ManuallyDrop;
 use std::os::raw::c_char;
 
@@ -163,42 +162,29 @@ impl<'a> QueryStream<'a> {
         format: OutputFormat,
         params: impl Into<QueryParams>,
     ) -> Result<*mut bindings::chdb_result> {
-        let query_cstr = CString::new(sql)?;
-        let format_cstr = CString::new(format.as_str())?;
+        let format = format.as_str();
         let encoded = EncodedParams::encode(params)?;
 
-        // SAFETY:
-        // - `conn` is a live `chdb_connection` from `Connection::handle()` on an open
-        //   connection that outlives this call (borrowed or owned by the stream).
-        // - `query_cstr` and `format_cstr` are NUL-terminated and outlive this call.
-        // - `encoded` owns the name/value `CString`s; `names_ptr`/`values_ptr` alias
-        //   those buffers for the duration of the call. libchdb may read them only
-        //   during this call (parameter bind at stream start) and must not retain them.
-        // - When `encoded.len() == 0`, both pointer args are null, which the C API
-        //   accepts for an empty parameter list.
+        // chdb_stream_query_with_params_n takes pointer + length for query,
+        // format, and each bound value. It returns an owned streaming
+        // chdb_result handle (or null on failure) that QueryStream::cancel
+        // (called from Drop) cancels and frees.
         let stream_ptr = unsafe {
-            bindings::chdb_stream_query_with_params(
+            bindings::chdb_stream_query_with_params_n(
                 conn,
-                query_cstr.as_ptr(),
-                format_cstr.as_ptr(),
+                sql.as_ptr() as *const c_char,
+                sql.len(),
+                format.as_ptr() as *const c_char,
+                format.len(),
                 encoded.names_ptr(),
+                encoded.name_lens_ptr(),
                 encoded.values_ptr(),
+                encoded.value_lens_ptr(),
                 encoded.len(),
             )
         };
 
-        if stream_ptr.is_null() {
-            return Err(Error::NoResult);
-        }
-
-        let probe = ManuallyDrop::new(QueryResult::new(stream_ptr));
-        if let Err(e) = probe.check_error_ref() {
-            drop(ManuallyDrop::into_inner(probe));
-            return Err(e);
-        }
-        std::mem::forget(ManuallyDrop::into_inner(probe));
-
-        Ok(stream_ptr)
+        Self::check_start(stream_ptr)
     }
 
     fn conn_handle(&self) -> bindings::chdb_connection {
@@ -317,6 +303,8 @@ impl Drop for QueryStream<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::CString;
+
     use super::*;
     use crate::bindings;
     use crate::session::SessionBuilder;

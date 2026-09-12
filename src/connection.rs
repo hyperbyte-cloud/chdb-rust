@@ -531,27 +531,26 @@ impl Connection {
         format: OutputFormat,
         params: impl Into<QueryParams>,
     ) -> Result<QueryResult> {
-        let query_cstr = CString::new(sql)?;
-        let format_cstr = CString::new(format.as_str())?;
+        let format = format.as_str();
         let encoded = EncodedParams::encode(params)?;
 
-        // SAFETY:
-        // - `self.inner` is non-null and points at a live `chdb_connection` for the
-        //   lifetime of `self` (set in `Connection::open`, freed only in `Drop`).
-        // - `query_cstr` and `format_cstr` are NUL-terminated and outlive this call.
-        // - `encoded` owns the name/value `CString`s; `names_ptr`/`values_ptr` alias
-        //   those buffers for the duration of the call. libchdb may read them only
-        //   during this call and must not retain the pointers afterward.
-        // - When `encoded.len() == 0`, both pointer args are null, which the C API
-        //   accepts for an empty parameter list.
+        // chdb_query_with_params_n takes pointer + length for query, format, and
+        // each bound value, so none of them need to be NUL-terminated. It returns
+        // an owned chdb_result handle (or null on failure): QueryResult::new below
+        // takes ownership, and QueryResult's Drop impl frees it via
+        // chdb_destroy_query_result.
         let conn = unsafe { *self.inner };
         let result_ptr = unsafe {
-            bindings::chdb_query_with_params(
+            bindings::chdb_query_with_params_n(
                 conn,
-                query_cstr.as_ptr(),
-                format_cstr.as_ptr(),
+                sql.as_ptr() as *const c_char,
+                sql.len(),
+                format.as_ptr() as *const c_char,
+                format.len(),
                 encoded.names_ptr(),
+                encoded.name_lens_ptr(),
                 encoded.values_ptr(),
+                encoded.value_lens_ptr(),
                 encoded.len(),
             )
         };

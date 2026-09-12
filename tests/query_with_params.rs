@@ -380,6 +380,7 @@ mod arrow_stream {
         let mut stream = session.execute_stream_arrow_with_params(
             "SELECT id FROM items WHERE id >= {min_id:UInt64}",
             [("min_id", 2_u64)],
+            None,
         )?;
 
         let mut rows = 0_usize;
