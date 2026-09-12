@@ -6,7 +6,7 @@
 //!
 //! Available when the crate is built with the `arrow` feature.
 
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::mem::ManuallyDrop;
 use std::os::raw::c_char;
 
@@ -18,6 +18,7 @@ use crate::arrow_options::ArrowOptions;
 use crate::bindings;
 use crate::connection::Connection;
 use crate::error::{Error, Result};
+use crate::query_param::{EncodedParams, QueryParams};
 use crate::query_result::QueryResult;
 
 enum ArrowQueryStreamConnection<'a> {
@@ -58,14 +59,11 @@ impl arrow::array::RecordBatchReader for ArrowReader {
     }
 }
 
-/// A streaming Arrow query result that yields record batches.
+/// A streaming Arrow query that yields [`RecordBatch`] values one block at a time.
 ///
-/// Returned by [`Connection::query_stream_arrow`](crate::connection::Connection::query_stream_arrow),
-/// [`Session::execute_stream_arrow`](crate::session::Session::execute_stream_arrow), and
-/// [`execute_stream_arrow`](crate::execute_stream_arrow). Each batch is produced via the
-/// Arrow C Data Interface.
-///
-/// `ArrowQueryStream` also implements [`Iterator`].
+/// Batches come from the Arrow C Data Interface (no Arrow IPC). Create a stream from a
+/// [`Connection`], [`Session`](crate::session::Session), or the crate-level
+/// `execute_stream_arrow*` helpers. Implements [`Iterator`].
 ///
 /// # Thread Safety
 ///
@@ -109,12 +107,26 @@ impl<'a> ArrowQueryStream<'a> {
     pub(crate) fn start_borrowed_with_params(
         conn: &'a mut Connection,
         sql: &str,
-        params: &[(&str, &str)],
+        params: impl Into<QueryParams>,
         opts: Option<&ArrowOptions>,
     ) -> Result<Self> {
         let inner = Self::start_query_with_params(conn.handle(), sql, params, opts)?;
         Ok(Self {
             conn: ArrowQueryStreamConnection::Borrowed(conn),
+            inner,
+            finished: false,
+        })
+    }
+
+    pub(crate) fn start_owned_with_params(
+        conn: Connection,
+        sql: &str,
+        params: impl Into<QueryParams>,
+        opts: Option<&ArrowOptions>,
+    ) -> Result<Self> {
+        let inner = Self::start_query_with_params(conn.handle(), sql, params, opts)?;
+        Ok(Self {
+            conn: ArrowQueryStreamConnection::Owned(conn),
             inner,
             finished: false,
         })
@@ -158,42 +170,60 @@ impl<'a> ArrowQueryStream<'a> {
     /// must both cancel with `chdb_stream_cancel_query` and free with
     /// `chdb_destroy_query_result` once done — `ArrowQueryStream::cancel`
     /// (called from `Drop`) does both.
+    /// A non-null stream handle may still carry an initialisation error, so the
+    /// handle is probed once before it is handed out. The probe must not free
+    /// the handle on the success path, hence the `ManuallyDrop` dance.
+    fn check_start(stream_ptr: *mut bindings::chdb_result) -> Result<*mut bindings::chdb_result> {
+        if stream_ptr.is_null() {
+            return Err(Error::NoResult);
+        }
+
+        let probe = ManuallyDrop::new(QueryResult::new(stream_ptr));
+        if let Err(e) = probe.check_error_ref() {
+            drop(ManuallyDrop::into_inner(probe));
+            return Err(e);
+        }
+        std::mem::forget(ManuallyDrop::into_inner(probe));
+
+        Ok(stream_ptr)
+    }
+
     fn start_query_with_params(
         conn: bindings::chdb_connection,
         sql: &str,
-        params: &[(&str, &str)],
+        params: impl Into<QueryParams>,
         opts: Option<&ArrowOptions>,
     ) -> Result<*mut bindings::chdb_result> {
-        let p = crate::params::ParamArrays::new(params);
-
-        // The C struct must outlive the call, so it is materialized here
-        // rather than in a temporary inside the argument list.
+        let query_cstr = CString::new(sql)?;
+        let encoded = EncodedParams::encode(params)?;
+        // Materialized into a named local so the pointer handed to C outlives the call.
         let c_opts = opts.map(|o| o.to_c());
         let opts_ptr = c_opts.as_ref().map_or(std::ptr::null(), |o| {
             o as *const bindings::chdb_arrow_options
         });
 
+        // SAFETY:
+        // - `conn` is a live `chdb_connection` from `Connection::handle()` on an open
+        //   connection that outlives this call (borrowed or owned by the stream).
+        // - `query_cstr` is NUL-terminated and outlives this call.
+        // - The third argument is the Arrow type-mapping options pointer, null when
+        //   the caller passed none, which selects the engine's default contract.
+        // - `encoded` owns the name/value `CString`s; `names_ptr`/`values_ptr` alias
+        //   those buffers for the duration of the call. libchdb may read them only
+        //   during this call (parameter bind at stream start) and must not retain them.
+        // - When `encoded.len() == 0`, both pointer args are null, which the C API
+        //   accepts for an empty parameter list.
         let stream_ptr = unsafe {
-            bindings::chdb_stream_query_arrow_with_params_n(
+            bindings::chdb_stream_query_arrow_with_params(
                 conn,
-                sql.as_ptr() as *const c_char,
-                sql.len(),
+                query_cstr.as_ptr(),
                 opts_ptr,
-                p.names(),
-                p.name_lens(),
-                p.values(),
-                p.value_lens(),
-                p.count(),
+                encoded.names_ptr(),
+                encoded.values_ptr(),
+                encoded.len(),
             )
         };
 
-        Self::check_start(stream_ptr)
-    }
-
-    /// A non-null stream handle may still carry an initialisation error, so the
-    /// handle is probed once before it is handed out. The probe must not free
-    /// the handle on the success path, hence the `ManuallyDrop` dance.
-    fn check_start(stream_ptr: *mut bindings::chdb_result) -> Result<*mut bindings::chdb_result> {
         if stream_ptr.is_null() {
             return Err(Error::NoResult);
         }
@@ -426,6 +456,52 @@ mod tests {
     fn test_arrow_query_stream_syntax_error_fails_at_start() -> Result<()> {
         let mut conn = Connection::open_in_memory()?;
         let result = conn.query_stream_arrow("SELECT invalid syntax here");
+        assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_arrow_query_stream_with_params_empty_filter_returns_none() -> Result<()> {
+        let tmp = tempdir();
+        let mut session = SessionBuilder::new()
+            .with_data_path(tmp.path())
+            .with_auto_cleanup(true)
+            .build()?;
+
+        session.execute(
+            "CREATE TABLE items (id UInt64) ENGINE = MergeTree() ORDER BY id",
+            None,
+        )?;
+        session.execute("INSERT INTO items VALUES (1), (2), (3)", None)?;
+
+        let mut stream = session.execute_stream_arrow_with_params(
+            "SELECT * FROM items WHERE id > {min_id:UInt64}",
+            [("min_id", 100_u64)],
+        )?;
+        assert!(stream.next_batch()?.is_none());
+        assert!(stream.next_batch()?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_arrow_query_stream_with_params_error_then_retry_returns_none() -> Result<()> {
+        let mut conn = Connection::open_in_memory()?;
+        let mut stream = conn.query_stream_arrow_with_params(
+            "SELECT * FROM nonexistent_table WHERE id = {id:UInt64}",
+            [("id", 1_u64)],
+            None,
+        )?;
+
+        assert!(stream.next_batch().is_err());
+        assert!(stream.next_batch()?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_arrow_query_stream_with_params_syntax_error_fails_at_start() -> Result<()> {
+        let mut conn = Connection::open_in_memory()?;
+        let result =
+            conn.query_stream_arrow_with_params("SELECT invalid syntax here", [("x", 1_u64)], None);
         assert!(result.is_err());
         Ok(())
     }

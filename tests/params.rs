@@ -12,7 +12,7 @@ fn a_typed_placeholder_round_trips() {
         .query_with_params(
             "SELECT {x:Int64} + 1 AS v",
             OutputFormat::TabSeparated,
-            &[("x", "41")],
+            [("x", "41")],
         )
         .expect("query");
 
@@ -27,7 +27,7 @@ fn several_parameters_bind_by_name_not_position() {
         .query_with_params(
             "SELECT concat({b:String}, {a:String}) AS v",
             OutputFormat::TabSeparated,
-            &[("a", "world"), ("b", "hello ")],
+            [("a", "world"), ("b", "hello ")],
         )
         .expect("query");
 
@@ -52,7 +52,7 @@ fn an_injection_payload_is_bound_as_data_and_never_executed() {
         .query_with_params(
             "SELECT {s:String} AS v",
             OutputFormat::JSONEachRow,
-            &[("s", "'; DROP TABLE t; --")],
+            [("s", "'; DROP TABLE t; --")],
         )
         .expect("query");
 
@@ -79,7 +79,11 @@ fn an_empty_slice_behaves_like_a_plain_query() {
     let conn = Connection::open_in_memory().expect("open");
 
     let result = conn
-        .query_with_params("SELECT 7 AS v", OutputFormat::TabSeparated, &[])
+        .query_with_params(
+            "SELECT 7 AS v",
+            OutputFormat::TabSeparated,
+            chdb_rust::query_param::QueryParams::new(),
+        )
         .expect("query");
 
     assert_eq!(result.data_utf8_lossy().trim(), "7");
@@ -90,7 +94,11 @@ fn a_missing_parameter_is_an_error_not_a_panic() {
     let conn = Connection::open_in_memory().expect("open");
 
     let err = conn
-        .query_with_params("SELECT {x:Int64} AS v", OutputFormat::TabSeparated, &[])
+        .query_with_params(
+            "SELECT {x:Int64} AS v",
+            OutputFormat::TabSeparated,
+            chdb_rust::query_param::QueryParams::new(),
+        )
         .expect_err("an unbound placeholder must fail");
 
     assert!(
@@ -107,7 +115,7 @@ fn a_format_stream_binds_parameters() {
         .query_stream_with_params(
             "SELECT number FROM numbers({n:UInt64})",
             OutputFormat::TabSeparated,
-            &[("n", "5")],
+            [("n", "5")],
         )
         .expect("stream");
 
@@ -120,23 +128,23 @@ fn a_format_stream_binds_parameters() {
 }
 
 #[test]
-fn a_parameter_value_may_contain_an_interior_nul() {
+fn a_parameter_value_containing_an_interior_nul_is_rejected() {
     let conn = Connection::open_in_memory().expect("open");
 
-    // "a\0b" is 3 bytes; if the value were truncated at the NUL (e.g. if it
-    // were passed through as a C string) length() would come back 1.
-    let value = "a\0b";
-    let result = conn
+    // Parameter values are encoded as C strings, so a value carrying an
+    // interior NUL cannot be represented. The important property is that this
+    // is refused outright rather than silently truncated at the NUL — a
+    // truncating encoder would bind "a" where the caller wrote "a\0b".
+    let err = conn
         .query_with_params(
             "SELECT length({s:String}) AS v",
             OutputFormat::TabSeparated,
-            &[("s", value)],
+            [("s", "a\0b")],
         )
-        .expect("query");
+        .expect_err("an interior NUL must be refused, not truncated");
 
-    assert_eq!(
-        result.data_utf8_lossy().trim(),
-        value.len().to_string(),
-        "expected the engine to see the full byte length, interior NUL included"
+    assert!(
+        matches!(err, chdb_rust::error::Error::Nul(_)),
+        "expected Error::Nul, got {err:?}"
     );
 }

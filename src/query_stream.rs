@@ -3,7 +3,6 @@
 //! This module provides the [`QueryStream`] type for reading large query results
 //! in chunks without materializing the entire output in memory.
 
-#[cfg(test)]
 use std::ffi::CString;
 use std::mem::ManuallyDrop;
 use std::os::raw::c_char;
@@ -12,6 +11,7 @@ use crate::bindings;
 use crate::connection::Connection;
 use crate::error::{Error, Result};
 use crate::format::OutputFormat;
+use crate::query_param::{EncodedParams, QueryParams};
 use crate::query_result::QueryResult;
 
 enum QueryStreamConnection<'a> {
@@ -22,8 +22,11 @@ enum QueryStreamConnection<'a> {
 /// A streaming query result that yields data in chunks.
 ///
 /// `QueryStream` is returned by [`Connection::query_stream`](crate::connection::Connection::query_stream),
-/// [`Session::execute_stream`](crate::session::Session::execute_stream), and
-/// [`execute_stream`](crate::execute_stream). Each chunk is a [`QueryResult`] that the caller owns
+/// [`Connection::query_stream_with_params`](crate::connection::Connection::query_stream_with_params),
+/// [`Session::execute_stream`](crate::session::Session::execute_stream),
+/// [`Session::execute_stream_with_params`](crate::session::Session::execute_stream_with_params),
+/// [`execute_stream`](crate::execute_stream), and
+/// [`execute_stream_with_params`](crate::execute_stream_with_params). Each chunk is a [`QueryResult`] that the caller owns
 /// and must drop before requesting the next chunk.
 ///
 /// `QueryStream` also implements [`Iterator`], so you can collect chunks with adapter methods
@@ -86,11 +89,25 @@ impl<'a> QueryStream<'a> {
         conn: &'a mut Connection,
         sql: &str,
         format: OutputFormat,
-        params: &[(&str, &str)],
+        params: impl Into<QueryParams>,
     ) -> Result<Self> {
         let stream = Self::start_query_with_params(conn.handle(), sql, format, params)?;
         Ok(Self {
             conn: QueryStreamConnection::Borrowed(conn),
+            stream,
+            finished: false,
+        })
+    }
+
+    pub(crate) fn start_owned_with_params(
+        conn: Connection,
+        sql: &str,
+        format: OutputFormat,
+        params: impl Into<QueryParams>,
+    ) -> Result<Self> {
+        let stream = Self::start_query_with_params(conn.handle(), sql, format, params)?;
+        Ok(Self {
+            conn: QueryStreamConnection::Owned(conn),
             stream,
             finished: false,
         })
@@ -122,40 +139,54 @@ impl<'a> QueryStream<'a> {
         Self::check_start(stream_ptr)
     }
 
-    /// Wraps `chdb_stream_query_with_params_n`. Bindings are captured during
-    /// stream initialisation and cleared when it returns, so nothing has to be
-    /// kept alive for the life of the stream.
-    fn start_query_with_params(
-        conn: bindings::chdb_connection,
-        sql: &str,
-        format: OutputFormat,
-        params: &[(&str, &str)],
-    ) -> Result<*mut bindings::chdb_result> {
-        let format = format.as_str();
-        let p = crate::params::ParamArrays::new(params);
-
-        let stream_ptr = unsafe {
-            bindings::chdb_stream_query_with_params_n(
-                conn,
-                sql.as_ptr() as *const c_char,
-                sql.len(),
-                format.as_ptr() as *const c_char,
-                format.len(),
-                p.names(),
-                p.name_lens(),
-                p.values(),
-                p.value_lens(),
-                p.count(),
-            )
-        };
-
-        Self::check_start(stream_ptr)
-    }
-
     /// A non-null stream handle may still carry an initialisation error, so the
     /// handle is probed once before it is handed out. The probe must not free
     /// the handle on the success path, hence the `ManuallyDrop` dance.
     fn check_start(stream_ptr: *mut bindings::chdb_result) -> Result<*mut bindings::chdb_result> {
+        if stream_ptr.is_null() {
+            return Err(Error::NoResult);
+        }
+
+        let probe = ManuallyDrop::new(QueryResult::new(stream_ptr));
+        if let Err(e) = probe.check_error_ref() {
+            drop(ManuallyDrop::into_inner(probe));
+            return Err(e);
+        }
+        std::mem::forget(ManuallyDrop::into_inner(probe));
+
+        Ok(stream_ptr)
+    }
+
+    fn start_query_with_params(
+        conn: bindings::chdb_connection,
+        sql: &str,
+        format: OutputFormat,
+        params: impl Into<QueryParams>,
+    ) -> Result<*mut bindings::chdb_result> {
+        let query_cstr = CString::new(sql)?;
+        let format_cstr = CString::new(format.as_str())?;
+        let encoded = EncodedParams::encode(params)?;
+
+        // SAFETY:
+        // - `conn` is a live `chdb_connection` from `Connection::handle()` on an open
+        //   connection that outlives this call (borrowed or owned by the stream).
+        // - `query_cstr` and `format_cstr` are NUL-terminated and outlive this call.
+        // - `encoded` owns the name/value `CString`s; `names_ptr`/`values_ptr` alias
+        //   those buffers for the duration of the call. libchdb may read them only
+        //   during this call (parameter bind at stream start) and must not retain them.
+        // - When `encoded.len() == 0`, both pointer args are null, which the C API
+        //   accepts for an empty parameter list.
+        let stream_ptr = unsafe {
+            bindings::chdb_stream_query_with_params(
+                conn,
+                query_cstr.as_ptr(),
+                format_cstr.as_ptr(),
+                encoded.names_ptr(),
+                encoded.values_ptr(),
+                encoded.len(),
+            )
+        };
+
         if stream_ptr.is_null() {
             return Err(Error::NoResult);
         }
@@ -423,6 +454,32 @@ mod tests {
     fn test_query_stream_syntax_error_fails_at_start() -> Result<()> {
         let mut conn = Connection::open_in_memory()?;
         let result = conn.query_stream("SELECT invalid syntax here", OutputFormat::JSONEachRow);
+        assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_query_stream_with_params_error_then_retry_returns_none() -> Result<()> {
+        let mut conn = Connection::open_in_memory()?;
+        let mut stream = conn.query_stream_with_params(
+            "SELECT * FROM nonexistent_table WHERE id = {id:UInt64}",
+            OutputFormat::JSONEachRow,
+            [("id", 1_u64)],
+        )?;
+
+        assert!(stream.next_chunk().is_err());
+        assert!(stream.next_chunk()?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_query_stream_with_params_syntax_error_fails_at_start() -> Result<()> {
+        let mut conn = Connection::open_in_memory()?;
+        let result = conn.query_stream_with_params(
+            "SELECT invalid syntax here",
+            OutputFormat::JSONEachRow,
+            [("x", 1_u64)],
+        );
         assert!(result.is_err());
         Ok(())
     }

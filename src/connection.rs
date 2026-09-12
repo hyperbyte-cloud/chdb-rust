@@ -9,10 +9,12 @@ use crate::arrow_options::ArrowOptions;
 #[cfg(all(feature = "arrow", direct_arrow_insert))]
 use crate::arrow_options::InsertOptions;
 #[cfg(feature = "arrow")]
+use crate::arrow_query_stream::ArrowQueryStream;
+#[cfg(feature = "arrow")]
 use crate::arrow_stream::{ArrowArray, ArrowSchema, ArrowStream};
 use crate::error::{Error, Result};
 use crate::format::{InputFormat, OutputFormat};
-use crate::params::ParamArrays;
+use crate::query_param::{EncodedParams, QueryParams};
 use crate::query_result::QueryResult;
 use crate::query_stream::QueryStream;
 use crate::{bindings, registry, CHDB_PROGRAM_NAME};
@@ -237,80 +239,6 @@ impl Connection {
         result.check_error()
     }
 
-    /// Execute a query with server-side named parameter binding.
-    ///
-    /// Placeholders are written `{name:Type}` in the SQL, and values are passed
-    /// to the engine as strings for it to parse according to the declared type.
-    /// Values are never interpolated into the SQL text, so a value cannot alter
-    /// the statement's structure.
-    ///
-    /// # Arguments
-    ///
-    /// * `sql` - Query text containing `{name:Type}` placeholders
-    /// * `format` - Output format for the result
-    /// * `params` - Name/value pairs; names must match the placeholders
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use chdb_rust::connection::Connection;
-    /// use chdb_rust::format::OutputFormat;
-    ///
-    /// let conn = Connection::open_in_memory()?;
-    /// let result = conn.query_with_params(
-    ///     "SELECT {x:Int64} + 1 AS v",
-    ///     OutputFormat::JSONEachRow,
-    ///     &[("x", "41")],
-    /// )?;
-    /// # Ok::<(), chdb_rust::error::Error>(())
-    /// ```
-    ///
-    /// # Notes
-    ///
-    /// On a duplicate name the last value wins, which is the engine's own
-    /// `NameToNameMap` behaviour. Bindings are scoped to this single call.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::QueryError`] if a placeholder has no matching parameter,
-    /// if a value does not parse as its declared type, or if the query fails.
-    pub fn query_with_params(
-        &self,
-        sql: &str,
-        format: OutputFormat,
-        params: &[(&str, &str)],
-    ) -> Result<QueryResult> {
-        let conn = unsafe { *self.inner };
-        let format = format.as_str();
-        let p = ParamArrays::new(params);
-
-        // Wraps chdb_query_with_params_n. The parameter arrays borrow `params`,
-        // which outlives the call; the engine clears the bindings on return.
-        // It returns an owned chdb_result handle (or null on failure):
-        // QueryResult::new below takes ownership of that pointer, and
-        // QueryResult's Drop impl frees it via chdb_destroy_query_result.
-        let result_ptr = unsafe {
-            bindings::chdb_query_with_params_n(
-                conn,
-                sql.as_ptr() as *const c_char,
-                sql.len(),
-                format.as_ptr() as *const c_char,
-                format.len(),
-                p.names(),
-                p.name_lens(),
-                p.values(),
-                p.value_lens(),
-                p.count(),
-            )
-        };
-
-        if result_ptr.is_null() {
-            return Err(Error::NoResult);
-        }
-
-        QueryResult::new(result_ptr).check_error()
-    }
-
     /// Execute a query and return a streaming result.
     ///
     /// Unlike [`query`](Self::query), this returns a [`QueryStream`] that yields
@@ -359,19 +287,42 @@ impl Connection {
         QueryStream::start_borrowed(self, sql, format)
     }
 
-    /// Stream a query's result with server-side named parameter binding.
+    /// Execute a query with ClickHouse `{name:Type}` parameter binding and stream text chunks.
     ///
-    /// The streaming counterpart of
-    /// [`query_with_params`](Self::query_with_params); see it for placeholder
-    /// syntax and binding rules.
+    /// Like [`Self::query_stream`], but SQL placeholders are bound from `params`
+    /// before streaming begins. The connection is exclusively borrowed for the
+    /// stream's lifetime. Syntax errors fail when the stream is created. A
+    /// missing placeholder binding is reported on the first
+    /// [`QueryStream::next_chunk`], not at start.
     ///
-    /// The connection is exclusively borrowed for the life of the stream,
-    /// because it accepts no other statement while a stream is open.
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use chdb_rust::connection::Connection;
+    /// use chdb_rust::format::OutputFormat;
+    ///
+    /// let mut conn = Connection::open_in_memory()?;
+    /// let mut stream = conn.query_stream_with_params(
+    ///     "SELECT {x:UInt64} AS v",
+    ///     OutputFormat::CSV,
+    ///     [("x", 11_u64)],
+    /// )?;
+    /// while let Some(chunk) = stream.next_chunk()? {
+    ///     print!("{}", chunk.data_utf8_lossy());
+    /// }
+    /// # Ok::<(), chdb_rust::error::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The query syntax is invalid
+    /// - The query cannot be started
     pub fn query_stream_with_params<'a>(
         &'a mut self,
         sql: &str,
         format: OutputFormat,
-        params: &[(&str, &str)],
+        params: impl Into<QueryParams>,
     ) -> Result<QueryStream<'a>> {
         QueryStream::start_borrowed_with_params(self, sql, format, params)
     }
@@ -402,22 +353,6 @@ impl Connection {
         sql: &str,
     ) -> Result<crate::arrow_query_stream::ArrowQueryStream<'a>> {
         crate::arrow_query_stream::ArrowQueryStream::start_borrowed(self, sql, None)
-    }
-
-    /// Stream a query's result as Arrow record batches, with server-side named
-    /// parameter binding and, optionally, explicit type-mapping options.
-    ///
-    /// Available when the crate is built with the `arrow` feature.
-    #[cfg(feature = "arrow")]
-    pub fn query_stream_arrow_with_params<'a>(
-        &'a mut self,
-        sql: &str,
-        params: &[(&str, &str)],
-        opts: Option<&ArrowOptions>,
-    ) -> Result<crate::arrow_query_stream::ArrowQueryStream<'a>> {
-        crate::arrow_query_stream::ArrowQueryStream::start_borrowed_with_params(
-            self, sql, params, opts,
-        )
     }
 
     /// Execute a query and take the whole result as one Arrow stream.
@@ -557,9 +492,119 @@ impl Connection {
         &'a mut self,
         sql: &str,
         format: InputFormat,
-        params: &[(&str, &str)],
+        params: impl Into<QueryParams>,
     ) -> Result<crate::insert_stream::InsertStream<'a>> {
         crate::insert_stream::InsertStream::start_with_params(self, sql, format, params)
+    }
+
+    /// Execute a query with ClickHouse `{name:Type}` parameter binding.
+    ///
+    /// Parameter values are encoded here and bound in the chDB library; they
+    /// are never interpolated into the SQL text. Names in `params` need not match placeholder
+    /// order in the query. An empty `params` list is a plain query.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use chdb_rust::connection::Connection;
+    /// use chdb_rust::format::OutputFormat;
+    ///
+    /// let conn = Connection::open_in_memory()?;
+    /// let result = conn.query_with_params(
+    ///     "SELECT {x:UInt64} + {y:UInt64} AS total",
+    ///     OutputFormat::CSV,
+    ///     [("y", 5_u64), ("x", 7_u64)],
+    /// )?;
+    /// # Ok::<(), chdb_rust::error::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The query syntax is invalid
+    /// - A `{name:Type}` placeholder has no matching param
+    /// - A value cannot be parsed as the type declared in the placeholder
+    /// - The query execution fails for any other reason
+    pub fn query_with_params(
+        &self,
+        sql: &str,
+        format: OutputFormat,
+        params: impl Into<QueryParams>,
+    ) -> Result<QueryResult> {
+        let query_cstr = CString::new(sql)?;
+        let format_cstr = CString::new(format.as_str())?;
+        let encoded = EncodedParams::encode(params)?;
+
+        // SAFETY:
+        // - `self.inner` is non-null and points at a live `chdb_connection` for the
+        //   lifetime of `self` (set in `Connection::open`, freed only in `Drop`).
+        // - `query_cstr` and `format_cstr` are NUL-terminated and outlive this call.
+        // - `encoded` owns the name/value `CString`s; `names_ptr`/`values_ptr` alias
+        //   those buffers for the duration of the call. libchdb may read them only
+        //   during this call and must not retain the pointers afterward.
+        // - When `encoded.len() == 0`, both pointer args are null, which the C API
+        //   accepts for an empty parameter list.
+        let conn = unsafe { *self.inner };
+        let result_ptr = unsafe {
+            bindings::chdb_query_with_params(
+                conn,
+                query_cstr.as_ptr(),
+                format_cstr.as_ptr(),
+                encoded.names_ptr(),
+                encoded.values_ptr(),
+                encoded.len(),
+            )
+        };
+
+        if result_ptr.is_null() {
+            return Err(Error::NoResult);
+        }
+
+        let result = QueryResult::new(result_ptr);
+        result.check_error()
+    }
+
+    #[cfg(feature = "arrow")]
+    /// Execute a query with ClickHouse `{name:Type}` parameter binding and stream Arrow batches.
+    ///
+    /// Like [`Self::query_stream_arrow`], but SQL placeholders are bound from `params`
+    /// in the chDB library before streaming begins. The connection is exclusively borrowed
+    /// for the stream's lifetime. Syntax errors fail when the stream is created.
+    /// A missing placeholder binding is reported on the first
+    /// [`ArrowQueryStream::next_batch`], not at start.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use chdb_rust::connection::Connection;
+    ///
+    /// let mut conn = Connection::open_in_memory()?;
+    /// let mut stream = conn.query_stream_arrow_with_params(
+    ///     "SELECT {x:UInt64} AS v",
+    ///     [("x", 11_u64)],
+    ///     None,
+    /// )?;
+    /// while let Some(batch) = stream.next_batch()? {
+    ///     println!("rows: {}", batch.num_rows());
+    /// }
+    /// # Ok::<(), chdb_rust::error::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The query syntax is invalid
+    /// - The query cannot be started
+    ///
+    /// Pass `opts` to control Arrow type mapping alongside the bindings; `None`
+    /// selects the engine's default contract.
+    pub fn query_stream_arrow_with_params<'a>(
+        &'a mut self,
+        sql: &str,
+        params: impl Into<QueryParams>,
+        opts: Option<&ArrowOptions>,
+    ) -> Result<ArrowQueryStream<'a>> {
+        ArrowQueryStream::start_borrowed_with_params(self, sql, params, opts)
     }
 
     #[cfg(feature = "arrow")]

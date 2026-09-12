@@ -1,6 +1,6 @@
 [package]
 name = "chdb-rust"
-version = "1.5.0"
+version = "1.4.0"
 edition = "2021"
 authors = ["Auxten"]
 description = "chDB FFI bindings for Rust(Experimental)"
@@ -69,9 +69,6 @@ name = "12_arrow_query_stream"
 required-features = ["arrow"]
 
 [[example]]
-name = "13_query_params"
-
-[[example]]
 name = "14_insert_stream"
 
 [[example]]
@@ -117,6 +114,12 @@ name = "durable_s3"
 required-features = ["durable-s3"]
 
 [[test]]
+# Imports execute_stream_arrow_with_params, which is #[cfg(feature = "arrow")].
+# Without this gate `cargo test --no-default-features` fails to compile.
+name = "query_with_params"
+required-features = ["arrow"]
+
+[[test]]
 name = "arrow_query"
 required-features = ["arrow"]
 
@@ -137,11 +140,12 @@ required-features = ["arrow"]
 # update_libchdb.sh, which are what actually fetch the engine.
 #
 # Release gate: this crate does not publish against a release candidate. The pin
-# moves to v26.7.3 — the first stable release carrying the Durable V1 ABI — and
-# the test matrix runs again before anything goes to crates.io. Until then rc.2
-# is what local builds and CI test against, since it is where backup, restore
-# and statement analysis first appeared.
-engine = "v26.7.2-rc.2"
+# is v26.7.3, the first stable release carrying the Durable V1 ABI, so that gate
+# is met and a publish can go ahead once the test matrix has run against it.
+# Backup, restore and statement analysis first appeared one release earlier, in
+# v26.7.2-rc.2, which is still the oldest engine the durable features build
+# against.
+engine = "v26.7.3"
 
 [package.metadata.docs.rs]
 # docs.rs cannot download libchdb or link native libraries.

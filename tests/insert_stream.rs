@@ -166,7 +166,7 @@ fn an_insert_statement_can_bind_parameters() {
         .insert_stream_with_params(
             "INSERT INTO t (a, b) SETTINGS min_insert_block_size_rows = {n:UInt64}",
             InputFormat::CSV,
-            &[("n", "1024")],
+            [("n", "1024")],
         )
         .expect("open stream");
 

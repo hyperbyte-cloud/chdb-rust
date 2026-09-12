@@ -20,9 +20,9 @@
 //! over its own build output (`chdb/build/check_static_lib_hermetic.sh`, gate
 //! 2). That one guards the release; this one guards what actually arrived.
 //!
-//! Measured across the two engines this crate has been pinned to: v26.7.0 shows
+//! Measured across the engines this crate has been pinned to: v26.7.0 shows
 //! 2365 externally visible definitions among 58 runtime members, and
-//! v26.7.2-rc.2 shows 0 among the same 58.
+//! v26.7.2-rc.2 and v26.7.3 show 0 among the same 58.
 
 mod common;
 

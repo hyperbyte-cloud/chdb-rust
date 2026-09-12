@@ -10,7 +10,7 @@ fn an_arrow_stream_binds_parameters() {
     let mut stream = conn
         .query_stream_arrow_with_params(
             "SELECT number FROM numbers({n:UInt64})",
-            &[("n", "3")],
+            [("n", "3")],
             None,
         )
         .expect("stream");
@@ -189,7 +189,7 @@ fn params_and_options_combine_on_the_arrow_stream() {
         .query_stream_arrow_with_params(
             "SELECT CAST(toString(number), 'LowCardinality(String)') AS c \
              FROM numbers({n:UInt64})",
-            &[("n", "7")],
+            [("n", "7")],
             Some(&opts),
         )
         .expect("stream");

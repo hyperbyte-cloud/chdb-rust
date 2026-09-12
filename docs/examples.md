@@ -7,13 +7,13 @@ This document provides simple and easy-to-follow examples for using chdb-rust, a
 1. [Basic Setup](#basic-setup)
 2. [Stateless Queries](#stateless-queries)
 3. [Stateful Sessions](#stateful-sessions)
-4. [Working with Query Results](#working-with-query-results)
-5. [Output Formats](#output-formats)
-6. [Reading from Files](#reading-from-files)
-7. [Error Handling](#error-handling)
-8. [Fast Bulk Inserts (Arrow)](#fast-bulk-inserts-arrow)
-9. [Durable Objects](#durable-objects)
-10. [Parameter Binding](#parameter-binding)
+4. [Parameterized Queries](#parameterized-queries)
+5. [Working with Query Results](#working-with-query-results)
+6. [Output Formats](#output-formats)
+7. [Reading from Files](#reading-from-files)
+8. [Error Handling](#error-handling)
+9. [Fast Bulk Inserts (Arrow)](#fast-bulk-inserts-arrow)
+10. [Durable Objects](#durable-objects)
 11. [Streaming INSERT](#streaming-insert)
 12. [One-Shot Arrow Export](#one-shot-arrow-export)
 13. [Runtime Control](#runtime-control)
@@ -102,6 +102,44 @@ fn main() -> Result<(), chdb_rust::error::Error> {
     Ok(())
 }
 ```
+
+## Parameterized Queries
+
+ClickHouse `{name:Type}` placeholders bind values in the chDB library. The SQL names
+the type; the Rust value is encoded and substituted during planning. Names
+match placeholders by name, not by order.
+
+```rust
+use chdb_rust::arg::Arg;
+use chdb_rust::execute_with_params;
+use chdb_rust::format::OutputFormat;
+use chdb_rust::query_param::QueryParams;
+
+fn main() -> Result<(), chdb_rust::error::Error> {
+    let result = execute_with_params(
+        "SELECT {x:UInt64} + {y:UInt64} AS total",
+        Some(&[Arg::OutputFormat(OutputFormat::CSV)]),
+        [("y", 5_u64), ("x", 7_u64)],
+    )?;
+    println!("{}", result.data_utf8_lossy());
+
+    let params = QueryParams::new()
+        .bind("sku", "SKU-101")
+        .bind("min_qty", 10_u64);
+    let result = execute_with_params(
+        "SELECT {sku:String} AS sku, {min_qty:UInt64} AS min_qty",
+        Some(&[Arg::OutputFormat(OutputFormat::CSV)]),
+        params,
+    )?;
+    println!("{}", result.data_utf8_lossy());
+
+    Ok(())
+}
+```
+
+`Session::execute_with_params` is the same binding on a persistent session.
+[`examples/13_query_with_params.rs`](../examples/13_query_with_params.rs) uses it
+for an inventory lookup with mixed-type filters.
 
 ## Working with Query Results
 
@@ -522,28 +560,6 @@ See `examples/09_durable_object.rs` for a runnable program, and
 [CHDB_DURABLE_V1_CONTRACT.md](https://github.com/chdb-io/chdb/blob/main/dev-docs/CHDB_DURABLE_V1_CONTRACT.md)
 for the protocol itself, which is the source of truth rather than this crate.
 
-## Parameter Binding
-
-Bind values server-side with `{name:Type}` placeholders instead of interpolating them into the SQL text. This works across buffered, streaming, Arrow-streaming and insert statements:
-
-```rust
-use chdb_rust::connection::Connection;
-use chdb_rust::format::OutputFormat;
-
-let conn = Connection::open_in_memory()?;
-
-let result = conn.query_with_params(
-    "SELECT {greeting:String} AS g, {n:Int64} * 2 AS doubled",
-    OutputFormat::JSONEachRow,
-    &[("greeting", "hello"), ("n", "21")],
-)?;
-println!("{}", result.data_utf8_lossy());
-```
-
-On a duplicate name the last value wins. Bindings are scoped to the single call, and a value like `'; DROP TABLE users; --` stays a string, never SQL.
-
-See `examples/13_query_params.rs` for a runnable program.
-
 ## Streaming INSERT
 
 `Connection::insert_stream` opens a write-side counterpart to query streaming: send the `INSERT` statement without data, then push rows in chunks via `std::io::Write`. The connection applies backpressure, so a producer faster than the engine is throttled rather than buffered without bound.
@@ -568,6 +584,11 @@ println!("wrote {} rows", stats.rows_written);
 The INSERT statement must carry no `FORMAT` clause and no inline data — the format is the `format` argument.
 
 See `examples/14_insert_stream.rs` for a runnable program.
+
+
+An INSERT statement can carry `{name:Type}` placeholders too — see
+[Parameterized Queries](#parameterized-queries) for the binding rules, and use
+`Connection::insert_stream_with_params` to open the stream.
 
 ## One-Shot Arrow Export
 
