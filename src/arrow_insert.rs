@@ -4,6 +4,7 @@
 //! [`Connection::register_arrow_array`](crate::connection::Connection::register_arrow_array),
 //! and `INSERT INTO … SELECT * FROM ArrowStream('name')`.
 
+#[cfg(not(direct_arrow_insert))]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use arrow::array::RecordBatchReader;
@@ -18,6 +19,10 @@ use crate::connection::Connection;
 use crate::error::Result;
 use crate::format::OutputFormat;
 
+/// Names the registered stream when the engine cannot insert an Arrow array
+/// directly. Built only then: with `direct_arrow_insert` it was unused, and a
+/// `-D warnings` build against such an engine failed.
+#[cfg(not(direct_arrow_insert))]
 static FALLBACK_STREAM_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Owns Arrow C Data Interface structs for the lifetime of a registration or insert.
